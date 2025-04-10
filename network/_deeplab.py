@@ -152,7 +152,7 @@ class ASPP(nn.Module):
             nn.Conv2d(5 * out_channels, out_channels, 1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),)
+            nn.Dropout(0.1),)
 
     def forward(self, x):
         res = []

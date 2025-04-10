@@ -12,3 +12,4 @@ test_results
 .venv
 models
 images
+runs
