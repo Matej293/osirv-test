@@ -28,7 +28,7 @@ wandb/
 .venv/
 VOCdevkit/
 cityscapes/
-data/images/
+data/images/*
 .vscode/
 .idea/
 *.swp
