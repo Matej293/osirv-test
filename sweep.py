@@ -30,7 +30,7 @@ def sweep_train(sweep_config=None):
             args.hp_threshold = float(wandb_params['training.hp_threshold'])
 
         # manually set the epochs for sweep runs
-        args.epochs = 1
+        args.epochs = 10
         
         config_manager.update_from_args(args)
         
