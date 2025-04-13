@@ -1,0 +1,53 @@
+# Model paths
+model:
+  pretrained_path: "./models/deeplabv3plus_resnet101.pth"
+  saved_path: "./models/deeplabv3plus_resnet101_trained.pth"
+  classifier: "DeepLabV3Plus"
+  backbone: "resnet101"
+  output_stride: 16
+  num_classes: 1
+  pretrained_backbone: true
+  aspp_dilate: [12, 24, 36]
+
+# Dataset configuration
+data:
+  csv_path: "./data/mhist_annotations.csv"
+  img_dir: "./data/images"
+  batch_size: 16
+  ssa_count: 990
+  hp_count: 2162
+
+# Training parameters
+training:
+  epochs: 10
+  learning_rate: 3e-5
+  weight_decay: 5e-4
+  ssa_threshold: 0.25
+  hp_threshold: 0.60
+  scheduler:
+    mode: "max"
+    factor: 0.2
+    patience: 2
+    threshold: 0.005
+    min_lr: 1e-6
+
+# Augmentation settings
+augmentation:
+  train:
+    resize: [256, 256]
+    crop: [224, 224]
+    horizontal_flip_prob: 0.5
+    vertical_flip_prob: 0.5
+    rotation_degrees: 30
+    brightness: 0.3
+    contrast: 0.3
+    saturation: 0.3
+    hue: 0.05
+    translate: [0.1, 0.1]
+  test:
+    resize: [224, 224]
+
+# Logging configuration
+logging:
+  log_dir: "./runs/mhist_experiment"
+  batch_log_interval: 100

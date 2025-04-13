@@ -4,63 +4,83 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 from network import modeling
-from metrics.logger import Logger
+from metrics.tensorboard_logger import TensorboardLogger
+from metrics.wandb_logger import WandbLogger
 from datasets.mhist import get_mhist_dataloader
-
-# default configuration
-MODEL_PATH = "models/deeplabv3plus_resnet101.pth"
-SAVE_MODEL_PATH = "models/deeplabv3plus_resnet101_trained.pth"
-CSV_PATH = "data/mhist_annotations.csv"
-IMG_DIR = "data/images"
-BATCH_SIZE = 16
-EPOCHS = 10
-L_R = 3e-5
-WEIGHT_DECAY = 5e-4
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-ssa_count = 990
-hp_count = 2162
-total_count = ssa_count + hp_count
-CLASS_WEIGHTS = torch.tensor([total_count / hp_count, total_count / ssa_count], device=device)
+from config.config_manager import ConfigManager
+from utils.visualization import visualize_segmentation_results
 
 # parsing command-line arguments
 def get_argparser():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="config/default_config.yaml",
+                        help="Path to config file")
     parser.add_argument("--mode", type=str, required=True, choices=["train", "eval"],
                         help="Mode: train or eval")
-    parser.add_argument("--csv_path", type=str, default=CSV_PATH,
+    parser.add_argument("--csv_path", type=str,
                         help="Path to annotations CSV file")
-    parser.add_argument("--img_dir", type=str, default=IMG_DIR,
+    parser.add_argument("--img_dir", type=str,
                         help="Path to image directory")
-    parser.add_argument("--model_path", type=str, default=MODEL_PATH,
+    parser.add_argument("--model_path", type=str,
                         help="Path to pre-trained model")
-    parser.add_argument("--save_model_path", type=str, default=SAVE_MODEL_PATH,
+    parser.add_argument("--save_model_path", type=str,
                         help="Path to save trained model")
-    parser.add_argument("--batch_size", type=int, default=BATCH_SIZE,
+    parser.add_argument("--batch_size", type=int,
                         help="Batch size for training/testing")
-    parser.add_argument("--epochs", type=int, default=EPOCHS,
+    parser.add_argument("--epochs", type=int,
                         help="Number of training epochs")
-    parser.add_argument("--lr", type=float, default=L_R,
+    parser.add_argument("--lr", type=float,
                       help="Learning rate for optimizer")
-    parser.add_argument("--weight_decay", type=float, default=WEIGHT_DECAY,
+    parser.add_argument("--weight_decay", type=float,
                       help="Weight decay for optimizer")
     parser.add_argument("--gpu_id", type=str, default="0",
                         help="GPU ID to use for training/testing")
+    parser.add_argument("--ssa_threshold", type=float,
+                      help="Classification threshold for SSA class")
+    parser.add_argument("--hp_threshold", type=float,
+                      help="Classification threshold for HP class")
+    parser.add_argument("--use_wandb", action="store_true",
+                      help="Use Weights & Biases for logging")
+    parser.add_argument("--wandb_project", type=str, default="mhist-classification",
+                      help="WandB project name")
+    parser.add_argument("--wandb_name", type=str, default=None,
+                      help="WandB run name")
+    parser.add_argument("--init_timeout", type=int, default=180,
+                      help="Timeout for wandb initialization")
     return parser
 
 # Training function
-def train_model(model, train_loader, device, epochs, logger, save_path, lr=L_R, weight_decay=WEIGHT_DECAY):
-    criterion = nn.BCEWithLogitsLoss(pos_weight=CLASS_WEIGHTS[1])
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+def train_model(model, train_loader, device, config, logger, save_path):
+    criterion = nn.BCEWithLogitsLoss(pos_weight=config.class_weights[1])
+    
+    lr = float(config.get('training.learning_rate'))
+    weight_decay = float(config.get('training.weight_decay'))
+    
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=lr,
+        weight_decay=weight_decay
+    )
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.3, patience=2, threshold=0.01, min_lr=1e-6
+        optimizer, 
+        mode=config.get('training.scheduler.mode', 'max'),
+        factor=config.get('training.scheduler.factor', 0.2),
+        patience=config.get('training.scheduler.patience', 2),
+        threshold=config.get('training.scheduler.threshold', 0.005),
+        min_lr=config.get('training.scheduler.min_lr', 1e-6)
     )
     
-    global_step = 0 # used by tensorboard logger
+    # Training loop
+    global_step = 0
     model.train()
+    epochs = config.get('training.epochs')
+    log_interval = config.get('logging.batch_log_interval')
+    ssa_threshold = config.get('training.ssa_threshold')
+    hp_threshold = config.get('training.hp_threshold')
     
     for epoch in range(epochs):
-        total_loss = 0.0
+        epoch_loss = 0.0
         correct, total = 0, 0
 
         for batch_idx, (images, masks) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")):
@@ -73,54 +93,53 @@ def train_model(model, train_loader, device, epochs, logger, save_path, lr=L_R, 
             loss.backward()
             optimizer.step()
 
-            # batch metrics
+            # applying thresholds for metrics
             batch_loss = loss.item()
             probs = torch.sigmoid(outputs)
-            predicted = (probs > 0.5).float()
+            predicted = torch.zeros_like(masks)
+            predicted[probs > ssa_threshold] = 1.0
+            predicted[probs < hp_threshold] = 0.0
+            
+            # updating batch metrics
             batch_correct = (predicted == masks).sum().item()
             batch_total = masks.numel()
-            batch_accuracy = batch_correct / batch_total
-
-            # Update epoch metrics
-            total_loss += batch_loss
+            epoch_loss += batch_loss
             correct += batch_correct
             total += batch_total
 
-            # batch-level metrics
-            if batch_idx % 100 == 0:
+            # logging batch metrics
+            if batch_idx % log_interval == 0:
                 logger.log_scalar("Train/BatchLoss", batch_loss, global_step)
-                logger.log_scalar("Train/BatchAccuracy", batch_accuracy, global_step)
-
-            # logging learning rate
-            current_lr = optimizer.param_groups[0]['lr']
-            logger.log_scalar("Train/LearningRate", current_lr, global_step)
+                logger.log_scalar("Train/BatchAccuracy", batch_correct / batch_total, global_step)
+                logger.log_scalar("Train/LearningRate", optimizer.param_groups[0]['lr'], global_step)
 
             global_step += 1
 
-        # epoch metrics
-        avg_loss = total_loss / len(train_loader)
+        # logging epoch metrics
         accuracy = correct / total
+        avg_loss = epoch_loss / len(train_loader)
+        logger.log_scalar("Train/EpochLoss", avg_loss, global_step)
+        logger.log_scalar("Train/EpochAccuracy", accuracy, global_step)
 
-        # epoch-level metrics
-        logger.log_scalar("Train/EpochLoss", avg_loss, epoch)
-        logger.log_scalar("Train/EpochAccuracy", accuracy, epoch)
-
+        # scheduler lr update
         scheduler.step(accuracy)
 
-        print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}, LR: {current_lr:.6f}")
+        print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}, "
+              f"Accuracy: {accuracy:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
 
+    # Save model
     torch.save({'model_state': model.state_dict()}, save_path)
     print(f"Model saved to {save_path}")
 
 # Evaluation function
-def evaluate_model(model, test_loader, device, logger):
+def evaluate_model(model, test_loader, device, config, logger, step=None):
     model.eval()
-    criterion = nn.BCEWithLogitsLoss(pos_weight=CLASS_WEIGHTS[1])
-
+    criterion = nn.BCEWithLogitsLoss(pos_weight=config.class_weights[1])
+    
     total_loss = 0.0
     correct, total = 0, 0
     all_preds, all_targets = [], []
-
+    
     with torch.no_grad():
         for images, masks in test_loader:
             images, masks = images.to(device), masks.to(device)
@@ -129,10 +148,14 @@ def evaluate_model(model, test_loader, device, logger):
             outputs = model(images)
             loss = criterion(outputs, masks)
             total_loss += loss.item()
-
+            
             probs = torch.sigmoid(outputs)
-            predicted = (probs > 0.5).float()
-
+            
+            # applying class-specific thresholds
+            predicted = torch.zeros_like(masks)
+            predicted[probs > config.get('training.ssa_threshold')] = 1.0
+            predicted[probs < config.get('training.hp_threshold')] = 0.0
+            
             correct += (predicted == masks).sum().item()
             total += masks.numel()
            
@@ -142,63 +165,166 @@ def evaluate_model(model, test_loader, device, logger):
     accuracy = correct / total
     avg_loss = total_loss / len(test_loader)
 
-    logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss)
+    # logging evaluation metrics
+    dice, iou = logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss, step=step)
+    class_metrics = logger.calculate_per_class_dice_iou(all_preds, all_targets)
 
     print(f"Evaluation — Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
+    print(f"Dice Coefficient: {dice:.4f}, IoU: {iou:.4f}")
+    print(f"HP - Dice: {class_metrics['dice_hp']:.4f}, IoU: {class_metrics['iou_hp']:.4f}")
+    print(f"SSA - Dice: {class_metrics['dice_ssa']:.4f}, IoU: {class_metrics['iou_ssa']:.4f}")
+
+    # logging sample images
+    if len(test_loader) > 0:
+        try:
+            sample_images, sample_masks = next(iter(test_loader))
+            sample_images = sample_images.to(device)
+            sample_masks = sample_masks.unsqueeze(1).float().to(device)
+            
+            with torch.no_grad():
+                sample_outputs = model(sample_images)
+                sample_probs = torch.sigmoid(sample_outputs)
+                
+                sample_preds = torch.zeros_like(sample_masks)
+                sample_preds[sample_probs > config.get('training.ssa_threshold')] = 1.0
+                sample_preds[sample_probs < config.get('training.hp_threshold')] = 0.0
+            
+            # visualizing the data as images
+            visualize_segmentation_results(
+                images=sample_images,
+                masks=sample_masks,
+                predictions=sample_preds,
+                probabilities=sample_probs,
+                step=step,
+                logger=logger
+            )
+        except Exception as e:
+            print(f"Warning: Could not visualize segmentation results: {e}")
+
+    # logging to the wandb site
+    if isinstance(logger, WandbLogger):
+        metadata = {
+            "accuracy": accuracy,
+            "dice": dice,
+            "iou": iou,
+            "dice_ssa": class_metrics['dice_ssa'],
+            "hp_threshold": config.get("training.hp_threshold"),
+            "ssa_threshold": config.get("training.ssa_threshold")
+        }
+        logger.log_model(
+            config.get('model.saved_path'),
+            name=f"mhist-model-acc{accuracy:.4f}-dice{dice:.4f}",
+            metadata=metadata
+        )
 
 # Main function
 def main():
-    opts = get_argparser().parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() and opts.gpu_id != "-1" else "cpu")
+    parser = get_argparser()
+    args = parser.parse_args()
+    
+    # load config
+    config = ConfigManager(args.config)
+    config.update_from_args(args)
+    
+    # device setup
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    logger = Logger(log_dir="runs/mhist_experiment")
+    if args.use_wandb:
+        wandb_config = {
+            "model": config.get("model"),
+            "data": config.get("data"),
+            "training": config.get("training"),
+            "augmentation": config.get("augmentation"),
+        }
+        
+        logger = WandbLogger(
+            project=args.wandb_project,
+            name=args.wandb_name,
+            config=wandb_config,
+            init_timeout=args.init_timeout
+        )
+        print("Using Weights & Biases for logging")
+    else:
+        logger = TensorboardLogger(log_dir=config.get('logging.log_dir'))
+        print("Using TensorBoard for logging")
 
-    # Load Dataset
-    train_loader = get_mhist_dataloader(opts.csv_path, opts.img_dir, opts.batch_size, partition="train")
-    test_loader = get_mhist_dataloader(opts.csv_path, opts.img_dir, opts.batch_size, partition="test")
-
-    # Load model
-    NUM_CLASSES = 1
-    model = modeling.deeplabv3plus_resnet101(num_classes=NUM_CLASSES, output_stride=16, pretrained_backbone=True)
-
-    # Modify classifier for binary classification
-    model.classifier = modeling.DeepLabHeadV3Plus(
-        in_channels=2048, low_level_channels=256, num_classes=NUM_CLASSES, aspp_dilate=[12, 24, 36]
+    # loader setup
+    train_loader = get_mhist_dataloader(
+        config.get('data.csv_path'), 
+        config.get('data.img_dir'), 
+        config.get('data.batch_size'),
+        partition="train",
+        augmentation_config=config.get('augmentation.train')
+    )
+    
+    test_loader = get_mhist_dataloader(
+        config.get('data.csv_path'), 
+        config.get('data.img_dir'), 
+        config.get('data.batch_size'),
+        partition="test",
+        augmentation_config=config.get('augmentation.test')
     )
 
-    if opts.mode == "train":
-        if os.path.exists(opts.model_path):
-            checkpoint = torch.load(opts.model_path, map_location=device, weights_only=False)
-            state_dict = checkpoint['model_state']
-            del state_dict['classifier.classifier.3.weight']
-            del state_dict['classifier.classifier.3.bias']
-            model.load_state_dict(state_dict, strict=False)
-            print(f"Loaded model from {opts.model_path}")
+    # model setup
+    model = modeling.deeplabv3plus_resnet101(
+        num_classes=config.get('model.num_classes'),
+        output_stride=config.get('model.output_stride'),
+        pretrained_backbone=config.get('model.pretrained_backbone')
+    )
+
+    model.classifier = modeling.DeepLabHeadV3Plus(
+        in_channels=2048,
+        low_level_channels=256, 
+        num_classes=config.get('model.num_classes'),
+        aspp_dilate=config.get('model.aspp_dilate')
+    )
+
+    if args.mode == "train":
+        model_path = config.get('model.pretrained_path')
+        if os.path.exists(model_path):
+            try:
+                checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+                if 'model_state' in checkpoint:
+                    state_dict = checkpoint['model_state']
+                    if 'classifier.classifier.3.weight' in state_dict:
+                        del state_dict['classifier.classifier.3.weight']
+                    if 'classifier.classifier.3.bias' in state_dict:
+                        del state_dict['classifier.classifier.3.bias']
+                    model.load_state_dict(state_dict, strict=False)
+                    print(f"Loaded model from {model_path}")
+                else:
+                    print(f"Warning: Invalid checkpoint format in {model_path}")
+            except Exception as e:
+                print(f"Error loading model: {e}")
         
         model.to(device)
         train_model(
             model, 
             train_loader, 
             device, 
-            opts.epochs, 
+            config,
             logger,
-            opts.save_model_path,
-            lr=opts.lr,
-            weight_decay=opts.weight_decay
+            config.get('model.saved_path')
         )
 
-    elif opts.mode == "eval":
-        if os.path.exists(opts.save_model_path):
-            checkpoint = torch.load(opts.save_model_path, map_location=device)
-            model.load_state_dict(checkpoint['model_state'])
-            print(f"Loaded trained model from {opts.save_model_path}")
-        else:
-            print(f"Error: Model file not found at {opts.save_model_path}")
-            return
+    elif args.mode == "eval":
+        model_path = config.get('model.saved_path')
+        if os.path.exists(model_path):
+            try:
+                checkpoint = torch.load(model_path, map_location=device)
+                if 'model_state' in checkpoint:
+                    model.load_state_dict(checkpoint['model_state'], strict=False)
+                    print(f"Loaded trained model from {model_path}")
+                else:
+                    print(f"Warning: Invalid checkpoint format in {model_path}")
+            except Exception as e:
+                print(f"Error loading model: {e}")
         
         model.to(device)
-        evaluate_model(model, test_loader, device, logger)
+
+        evaluate_model(model, test_loader, device, config, logger)
     
     logger.close()
     
