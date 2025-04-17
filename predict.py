@@ -138,6 +138,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, "
               f"Accuracy: {accuracy:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
         
+        """
         # Save best model - handle DDP case
         if save_path and accuracy > best_metric:
             best_metric = accuracy
@@ -148,7 +149,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
                 torch.save(model.state_dict(), save_path)
             
             if logger:
-                logger.log_text(f"Saved best model with {config.get('training.scheduler.mode')}={accuracy:.4f}")
+                logger.log_text(f"Saved best model with {config.get('training.scheduler.mode')}={accuracy:.4f}")"""
 
     return model
 

@@ -34,6 +34,10 @@ class WandbLogger(BaseLogger):
         """Log a scalar value to wandb."""
         wandb.log({tag: value}, step=step)
     
+    def log_text(self, text, step=None):
+        """Log text to W&B."""
+        wandb.log({"Text": wandb.Html(text)}, step=step)
+
     def log_images(self, tag, images, step=None, max_images=4):
         """Log images to wandb."""
         if images is None or len(images) == 0:

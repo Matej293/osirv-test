@@ -7,6 +7,10 @@ from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_
 class BaseLogger:
     """Base logger class with common functionality for all loggers."""
     
+    def log_text(self, text, step=None):
+        """Log a text message."""
+        pass  # To be implemented by subclasses
+    
     def _ensure_numpy_int(self, data):
         """Convert data to numpy int array regardless of input type."""
         if isinstance(data, torch.Tensor):
