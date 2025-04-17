@@ -222,7 +222,7 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
             )
         except Exception as e:
             print(f"Warning: Could not visualize segmentation results: {e}")
-
+"""
     # logging to the wandb site
     if isinstance(logger, WandbLogger):
         metadata = {
@@ -238,6 +238,7 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
             name=f"mhist-model-acc{accuracy:.4f}-dice{dice:.4f}",
             metadata=metadata
         )
+"""
 
 # Main function
 def main():
