@@ -160,7 +160,7 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
     
     total_loss = 0.0
     correct, total = 0, 0
-    all_preds, all_targets = []
+    all_preds, all_targets = [], []
     
     with torch.no_grad():
         for images, masks in test_loader:

@@ -215,11 +215,11 @@ def run_sweep():
                 join=True
             )
         
-        wandb.agent(sweep_id, function=distributed_agent)
+        wandb.agent(sweep_id, function=distributed_agent, count=200)
     else:
         print("Only one GPU found, using single GPU training")
         from sweep import sweep_train
-        wandb.agent(sweep_id, function=sweep_train)
+        wandb.agent(sweep_id, function=sweep_train, count=200)
 
 if __name__ == "__main__":
     run_sweep()

@@ -154,4 +154,4 @@ if __name__ == "__main__":
     sweep_id = wandb.sweep(sweep_config, project="mhist-classification")
     print(f"Sweep initialized with ID: {sweep_id}")
     
-    wandb.agent(sweep_id, function=sweep_train)
+    wandb.agent(sweep_id, function=sweep_train, count=200)
