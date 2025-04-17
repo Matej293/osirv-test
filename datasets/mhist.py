@@ -42,8 +42,7 @@ class MHISTDataset(Dataset):
 
         return image, label_mask
 
-
-def get_mhist_dataloader(csv_file, img_dir, batch_size=16, partition="train", augmentation_config=None): 
+def get_mhist_dataloader(csv_file, img_dir, batch_size=16, partition="train", augmentation_config=None, distributed=False, world_size=1, rank=0, return_dataset=False): 
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
@@ -78,5 +77,34 @@ def get_mhist_dataloader(csv_file, img_dir, batch_size=16, partition="train", au
         ])
     
     dataset = MHISTDataset(csv_file, img_dir, transform=transform, partition=partition)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=(partition=="train"))
+    
+    # for distributed training, we need to ensure that each process gets a different subset of the data
+    if return_dataset:
+        return dataset
+    
+    # Create appropriate dataloader based on whether distributed training is used
+    if distributed and partition == "train":
+        from torch.utils.data.distributed import DistributedSampler
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True
+        )
+        dataloader = DataLoader(
+            dataset, 
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=4,
+            pin_memory=True
+        )
+    else:
+        dataloader = DataLoader(
+            dataset, 
+            batch_size=batch_size, 
+            shuffle=(partition=="train"),
+            num_workers=4,
+            pin_memory=True
+        )
+    
     return dataloader

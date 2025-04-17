@@ -50,8 +50,9 @@ def get_argparser():
     return parser
 
 # Training function
-def train_model(model, train_loader, device, config, logger, save_path):
-    criterion = nn.BCEWithLogitsLoss(pos_weight=config.class_weights[1])
+def train_model(model, train_loader, device, config, logger=None, save_path=None, distributed=False, train_sampler=None):
+    """Train the model with the given configuration."""
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0]).to(device))
     
     lr = float(config.get('training.learning_rate'))
     weight_decay = float(config.get('training.weight_decay'))
@@ -79,9 +80,15 @@ def train_model(model, train_loader, device, config, logger, save_path):
     ssa_threshold = config.get('training.ssa_threshold')
     hp_threshold = config.get('training.hp_threshold')
     
+    best_metric = 0.0
+    
     for epoch in range(epochs):
         epoch_loss = 0.0
         correct, total = 0, 0
+        
+        # Set epoch for distributed sampler if using distributed training
+        if distributed and train_sampler is not None:
+            train_sampler.set_epoch(epoch)
 
         for batch_idx, (images, masks) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")):
             images, masks = images.to(device), masks.to(device)
@@ -103,33 +110,47 @@ def train_model(model, train_loader, device, config, logger, save_path):
             # updating batch metrics
             batch_correct = (predicted == masks).sum().item()
             batch_total = masks.numel()
+            
             epoch_loss += batch_loss
             correct += batch_correct
             total += batch_total
-
-            # logging batch metrics
-            if batch_idx % log_interval == 0:
-                logger.log_scalar("Train/BatchLoss", batch_loss, global_step)
-                logger.log_scalar("Train/BatchAccuracy", batch_correct / batch_total, global_step)
-                logger.log_scalar("Train/LearningRate", optimizer.param_groups[0]['lr'], global_step)
-
+            
             global_step += 1
+            
+            # logging batch results
+            if logger and batch_idx % log_interval == 0:
+                batch_accuracy = batch_correct / batch_total
+                
+                # Use log_scalar instead of log_metrics
+                logger.log_scalar('Train/BatchLoss', batch_loss, step=global_step)
+                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=global_step)
+                logger.log_scalar('Train/LearningRate', optimizer.param_groups[0]['lr'], step=global_step)
 
-        # logging epoch metrics
+        # epoch metrics
+        epoch_loss /= len(train_loader)
         accuracy = correct / total
-        avg_loss = epoch_loss / len(train_loader)
-        logger.log_scalar("Train/EpochLoss", avg_loss, global_step)
-        logger.log_scalar("Train/EpochAccuracy", accuracy, global_step)
 
-        # scheduler lr update
+        logger.log_scalar('Train/EpochLoss', epoch_loss, step=global_step)
+        logger.log_scalar('Train/Accuracy', accuracy, step=global_step)
+        
         scheduler.step(accuracy)
-
-        print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}, "
+        
+        print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, "
               f"Accuracy: {accuracy:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
+        
+        # Save best model - handle DDP case
+        if save_path and accuracy > best_metric:
+            best_metric = accuracy
 
-    # Save model
-    torch.save({'model_state': model.state_dict()}, save_path)
-    print(f"Model saved to {save_path}")
+            if distributed and hasattr(model, 'module'):
+                torch.save(model.module.state_dict(), save_path)
+            else:
+                torch.save(model.state_dict(), save_path)
+            
+            if logger:
+                logger.log_text(f"Saved best model with {config.get('training.scheduler.mode')}={accuracy:.4f}")
+
+    return model
 
 # Evaluation function
 def evaluate_model(model, test_loader, device, config, logger, step=None):
@@ -138,7 +159,7 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
     
     total_loss = 0.0
     correct, total = 0, 0
-    all_preds, all_targets = [], []
+    all_preds, all_targets = []
     
     with torch.no_grad():
         for images, masks in test_loader:
