@@ -17,8 +17,8 @@ def get_argparser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="config/default_config.yaml",
                         help="Path to config file")
-    parser.add_argument("--mode", type=str, required=True, choices=["train", "eval"],
-                        help="Mode: train or eval")
+    parser.add_argument("--mode", type=str, choices=["train", "eval"],
+                        help="Mode: train or eval (if not provided, will do both)")
     parser.add_argument("--csv_path", type=str,
                         help="Path to annotations CSV file")
     parser.add_argument("--img_dir", type=str,
@@ -283,6 +283,8 @@ def main():
         partition="train",
         augmentation_config=config.get('augmentation.train')
     )
+
+    final_step = len(train_loader) * config.get('training.epochs')
     
     test_loader = get_mhist_dataloader(
         config.get('data.csv_path'), 
@@ -306,7 +308,7 @@ def main():
         aspp_dilate=config.get('model.aspp_dilate')
     )
 
-    if args.mode == "train":
+    if not hasattr(args, 'mode') or args.mode == "train":
         model_path = config.get('model.pretrained_path')
         if os.path.exists(model_path):
             try:
@@ -325,7 +327,7 @@ def main():
                 print(f"Error loading model: {e}")
         
         model.to(device)
-        train_model(
+        trained_model = train_model(
             model, 
             train_loader, 
             device, 
@@ -333,23 +335,27 @@ def main():
             logger,
             config.get('model.saved_path')
         )
-
-    elif args.mode == "eval":
-        model_path = config.get('model.saved_path')
-        if os.path.exists(model_path):
-            try:
-                checkpoint = torch.load(model_path, map_location=device)
-                if 'model_state' in checkpoint:
-                    model.load_state_dict(checkpoint['model_state'], strict=False)
-                    print(f"Loaded trained model from {model_path}")
-                else:
-                    print(f"Warning: Invalid checkpoint format in {model_path}")
-            except Exception as e:
-                print(f"Error loading model: {e}")
         
-        model.to(device)
+        if not hasattr(args, 'mode'):
+            print("\n--- Running evaluation after training ---\n")
+            evaluate_model(trained_model, test_loader, device, config, logger, step=final_step)
 
-        evaluate_model(model, test_loader, device, config, logger)
+    if not hasattr(args, 'mode') or args.mode == "eval":
+        if hasattr(args, 'mode'):
+            model_path = config.get('model.saved_path')
+            if os.path.exists(model_path):
+                try:
+                    checkpoint = torch.load(model_path, map_location=device)
+                    if 'model_state' in checkpoint:
+                        model.load_state_dict(checkpoint['model_state'], strict=False)
+                        print(f"Loaded trained model from {model_path}")
+                    else:
+                        print(f"Warning: Invalid checkpoint format in {model_path}")
+                except Exception as e:
+                    print(f"Error loading model: {e}")
+            
+            model.to(device)
+            evaluate_model(model, test_loader, device, config, logger, step=final_step)
     
     logger.close()
     
