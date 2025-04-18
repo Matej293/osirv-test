@@ -2,8 +2,10 @@ import os
 import argparse
 import torch
 import torch.nn as nn
+import wandb
 from tqdm import tqdm
 from network import modeling
+
 from metrics.tensorboard_logger import TensorboardLogger
 from metrics.wandb_logger import WandbLogger
 from datasets.mhist import get_mhist_dataloader
@@ -137,20 +139,37 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
         
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, "
               f"Accuracy: {accuracy:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
+    
+    # checking if it is a sweep run
+    is_sweep_run = False
+    if logger and isinstance(logger, WandbLogger) and wandb.run and wandb.run.sweep_id:
+        is_sweep_run = True
+    
+    # save the model if not a sweep run
+    if save_path and not is_sweep_run:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        if distributed:
+            torch.save({'model_state': model.module.state_dict()}, save_path)
+        else:
+            torch.save({'model_state': model.state_dict()}, save_path)
+        print(f"Model saved to {save_path}")
         
-        """
-        # Save best model - handle DDP case
-        if save_path and accuracy > best_metric:
-            best_metric = accuracy
-
-            if distributed and hasattr(model, 'module'):
-                torch.save(model.module.state_dict(), save_path)
-            else:
-                torch.save(model.state_dict(), save_path)
-            
-            if logger:
-                logger.log_text(f"Saved best model with {config.get('training.scheduler.mode')}={accuracy:.4f}")"""
-
+        # Log the model as an artifact if using wandb
+        if logger and isinstance(logger, WandbLogger):
+            logger.log_model(
+                model_path=save_path,
+                metadata={
+                    "accuracy": accuracy,
+                    "loss": epoch_loss,
+                    "epochs": epochs,
+                    "batch_size": config.get("data.batch_size"),
+                    "learning_rate": config.get("training.learning_rate")
+                }
+            )
+    elif is_sweep_run:
+        print("Sweep run detected - skipping model save")
+    
     return model
 
 # Evaluation function
@@ -222,23 +241,6 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
             )
         except Exception as e:
             print(f"Warning: Could not visualize segmentation results: {e}")
-"""
-    # logging to the wandb site
-    if isinstance(logger, WandbLogger):
-        metadata = {
-            "accuracy": accuracy,
-            "dice": dice,
-            "iou": iou,
-            "dice_ssa": class_metrics['dice_ssa'],
-            "hp_threshold": config.get("training.hp_threshold"),
-            "ssa_threshold": config.get("training.ssa_threshold")
-        }
-        logger.log_model(
-            config.get('model.saved_path'),
-            name=f"mhist-model-acc{accuracy:.4f}-dice{dice:.4f}",
-            metadata=metadata
-        )
-"""
 
 # Main function
 def main():

@@ -13,17 +13,17 @@ model:
 data:
   csv_path: "./data/mhist_annotations.csv"
   img_dir: "./data/images"
-  batch_size: 16
+  batch_size: 8
   ssa_count: 990
   hp_count: 2162
 
 # Training parameters
 training:
   epochs: 10
-  learning_rate: 3e-5
-  weight_decay: 5e-4
-  ssa_threshold: 0.25
-  hp_threshold: 0.60
+  learning_rate: 9.61752e-05
+  weight_decay: 0.00041668
+  ssa_threshold: 0.45
+  hp_threshold: 0.5
   scheduler:
     mode: "max"
     factor: 0.2
@@ -36,10 +36,10 @@ augmentation:
   train:
     resize: [256, 256]
     crop: [224, 224]
-    horizontal_flip_prob: 0.5
-    vertical_flip_prob: 0.5
-    rotation_degrees: 30
-    brightness: 0.3
+    horizontal_flip_prob: 0.3
+    vertical_flip_prob: 0.3
+    rotation_degrees: 15
+    brightness: 0.5
     contrast: 0.3
     saturation: 0.3
     hue: 0.05

@@ -96,14 +96,6 @@ class ConfigManager:
         for key in keys[:-1]:
             d = d.setdefault(key, {})
         d[keys[-1]] = value
-    
-    def update(self, update_dict):
-        """Update configuration with the provided dictionary of values."""
-        for key_path, value in update_dict.items():
-            self._update_nested(self.config, key_path, value)
         
-        self._setup_class_weights()
-        return self
-    
     def __str__(self):
         return yaml.dump(self.config, default_flow_style=False)
