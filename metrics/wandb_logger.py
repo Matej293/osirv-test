@@ -3,6 +3,7 @@ import numpy as np
 import wandb
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_score, recall_score, f1_score
+import os
 
 from metrics.base_logger import BaseLogger
 
@@ -10,6 +11,19 @@ class WandbLogger(BaseLogger):
     def __init__(self, project="mhist-classification", name=None, config=None, init_timeout=180):
         """Initialize wandb logger."""
         super().__init__()
+        self.config = config
+        
+        if config:
+            dataset_size = 0
+            if 'data.csv_path' in config and os.path.exists(config.get('data.csv_path')):
+                import pandas as pd
+                df = pd.read_csv(config.get('data.csv_path'))
+                dataset_size = len(df[df['Partition'] == 'train'])
+            
+            batch_size = config.get('data.batch_size', 16)
+            self.steps_per_epoch = dataset_size // batch_size if dataset_size > 0 and batch_size > 0 else 1
+        else:
+            self.steps_per_epoch = 1
         
         if wandb.run is not None:
             self.run = wandb.run
@@ -35,17 +49,16 @@ class WandbLogger(BaseLogger):
 
     def _define_metric_groups(self):
         """Define metric groups with their own step counters."""
-        # batch metrics
-        wandb.define_metric("Train/BatchLoss", step_metric="batch_step")
-        wandb.define_metric("Train/BatchAccuracy", step_metric="batch_step")
+        wandb.define_metric("step_normalized", summary="max")
         
-        # epoch metrics
-        wandb.define_metric("Train/EpochLoss", step_metric="epoch_step")
-        wandb.define_metric("Train/Accuracy", step_metric="epoch_step")
-        wandb.define_metric("Train/LearningRate", step_metric="epoch_step")
+        wandb.define_metric("Train/BatchLoss", step_metric="step_normalized")
+        wandb.define_metric("Train/BatchAccuracy", step_metric="step_normalized")
         
-        # eval metrics
-        wandb.define_metric("Eval/*", step_metric="epoch_step")
+        wandb.define_metric("Train/EpochLoss", step_metric="epoch")
+        wandb.define_metric("Train/Accuracy", step_metric="epoch")
+        wandb.define_metric("Train/LearningRate", step_metric="epoch")
+        
+        wandb.define_metric("Eval/*", step_metric="epoch")
     
     def log_scalar(self, tag, value, step=None):
         """Log a scalar value to wandb using the appropriate step counter."""
@@ -54,9 +67,18 @@ class WandbLogger(BaseLogger):
             return
         
         if tag.startswith("Train/Batch"):
-            wandb.log({tag: value, "batch_step": step})
+            total_steps = self.config.get('training.epochs') * self.steps_per_epoch
+            normalized_step = step / total_steps if total_steps > 0 else 0
+            
+            wandb.log({
+                tag: value,
+                "step_normalized": normalized_step
+            })
         elif tag.startswith(("Train/Epoch", "Train/Accuracy", "Train/Learning", "Eval/")):
-            wandb.log({tag: value, "epoch_step": step})
+            wandb.log({
+                tag: value,
+                "epoch": step
+            })
         else:
             wandb.log({tag: value})
     

@@ -117,11 +117,11 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
             # logging batch results
             if logger and batch_idx % log_interval == 0:
                 batch_accuracy = batch_correct / batch_total
-
-                relative_step = epoch + (batch_idx / len(train_loader))
                 
-                logger.log_scalar('Train/BatchLoss', batch_loss, step=relative_step)
-                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=relative_step)
+                global_step = epoch * len(train_loader) + batch_idx
+                
+                logger.log_scalar('Train/BatchLoss', batch_loss, step=global_step)
+                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=global_step)
 
         # epoch metrics
         epoch_loss /= len(train_loader)
@@ -373,7 +373,7 @@ def main():
         
         if run_eval and args.mode is None:
             print("\n--- Running evaluation after training ---\n")
-            evaluate_model(trained_model, test_loader, device, config, logger, epoch=config.get('training.epochs') - 1)
+            evaluate_model(trained_model, test_loader, device, config, logger, epoch=config.get('training.epochs'))
             # don't run eval again
             run_eval = False
 
@@ -392,7 +392,7 @@ def main():
                 print(f"Error loading model: {e}")
         
         model.to(device)
-        evaluate_model(model, test_loader, device, config, logger, step=config.get('training.epochs') - 1)
+        evaluate_model(model, test_loader, device, config, logger, step=config.get('training.epochs'))
     
     logger.close()
     

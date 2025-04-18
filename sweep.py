@@ -136,7 +136,7 @@ def sweep_train(sweep_config=None):
             save_path=f"models/sweep_{wandb.run.id}.pth"
         )
 
-        final_epoch = config_manager.get('training.epochs') - 1
+        final_epoch = config_manager.get('training.epochs')
 
         evaluate_model(
             model=model,
