@@ -121,10 +121,10 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
                 batch_accuracy = batch_correct / batch_total
                 
                 # logging epoch as decimal: 1.25 = 25% through epoch 1
-                relative_epoch = int(epoch + (batch_idx / len(train_loader)) * 1000)
+                relative_step = epoch * len(train_loader) + batch_idx
                 
-                logger.log_scalar('Train/BatchLoss', batch_loss, step=relative_epoch)
-                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=relative_epoch)
+                logger.log_scalar('Train/BatchLoss', batch_loss, step=relative_step)
+                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=relative_step)
 
         # epoch metrics
         epoch_loss /= len(train_loader)
