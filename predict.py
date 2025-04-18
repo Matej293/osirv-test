@@ -331,6 +331,18 @@ def main():
             except Exception as e:
                 print(f"Error loading model: {e}")
         
+        # print the hyperparameters
+        print("\nTraining with hyperparameters:")
+        print(f"Learning Rate: {config.get('training.learning_rate')}")
+        print(f"Weight Decay: {config.get('training.weight_decay')}")
+        print(f"Epochs: {config.get('training.epochs')}")
+        print(f"Batch Size: {config.get('data.batch_size')}")
+        print(f"SSA Threshold: {config.get('training.ssa_threshold')}")
+        print(f"HP Threshold: {config.get('training.hp_threshold')}")
+        print("\nAugmentation parameters:")
+        for key, value in config.get('augmentation.train').items():
+            print(f"{key}: {value}")
+
         model.to(device)
         trained_model = train_model(
             model, 
