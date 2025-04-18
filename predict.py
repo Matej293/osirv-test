@@ -81,8 +81,6 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     ssa_threshold = config.get('training.ssa_threshold')
     hp_threshold = config.get('training.hp_threshold')
     
-    best_metric = 0.0
-    
     for epoch in range(epochs):
         epoch_loss = 0.0
         correct, total = 0, 0
@@ -119,8 +117,8 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
             # logging batch results
             if logger and batch_idx % log_interval == 0:
                 batch_accuracy = batch_correct / batch_total
-                
-                relative_step = epoch * len(train_loader) + batch_idx
+
+                relative_step = epoch + (batch_idx / len(train_loader))
                 
                 logger.log_scalar('Train/BatchLoss', batch_loss, step=relative_step)
                 logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=relative_step)
