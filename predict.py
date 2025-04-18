@@ -308,7 +308,12 @@ def main():
         aspp_dilate=config.get('model.aspp_dilate')
     )
 
-    if not hasattr(args, 'mode') or args.mode == "train":
+    # if train/eval mode is not provided, run both train and eval
+    run_train = args.mode is None or args.mode == "train"
+    run_eval = args.mode is None or args.mode == "eval"
+
+    # Training phase
+    if run_train:
         model_path = config.get('model.pretrained_path')
         if os.path.exists(model_path):
             try:
@@ -336,26 +341,28 @@ def main():
             config.get('model.saved_path')
         )
         
-        if not hasattr(args, 'mode'):
+        if run_eval and args.mode is None:
             print("\n--- Running evaluation after training ---\n")
             evaluate_model(trained_model, test_loader, device, config, logger, step=final_step)
+            # don't run eval again
+            run_eval = False
 
-    if not hasattr(args, 'mode') or args.mode == "eval":
-        if hasattr(args, 'mode'):
-            model_path = config.get('model.saved_path')
-            if os.path.exists(model_path):
-                try:
-                    checkpoint = torch.load(model_path, map_location=device)
-                    if 'model_state' in checkpoint:
-                        model.load_state_dict(checkpoint['model_state'], strict=False)
-                        print(f"Loaded trained model from {model_path}")
-                    else:
-                        print(f"Warning: Invalid checkpoint format in {model_path}")
-                except Exception as e:
-                    print(f"Error loading model: {e}")
-            
-            model.to(device)
-            evaluate_model(model, test_loader, device, config, logger, step=final_step)
+    # Evaluation phase
+    if run_eval:
+        model_path = config.get('model.saved_path')
+        if os.path.exists(model_path):
+            try:
+                checkpoint = torch.load(model_path, map_location=device)
+                if 'model_state' in checkpoint:
+                    model.load_state_dict(checkpoint['model_state'], strict=False)
+                    print(f"Loaded trained model from {model_path}")
+                else:
+                    print(f"Warning: Invalid checkpoint format in {model_path}")
+            except Exception as e:
+                print(f"Error loading model: {e}")
+        
+        model.to(device)
+        evaluate_model(model, test_loader, device, config, logger, step=final_step)
     
     logger.close()
     
