@@ -118,10 +118,10 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
             if logger and batch_idx % log_interval == 0:
                 batch_accuracy = batch_correct / batch_total
                 
-                global_step = epoch * len(train_loader) + batch_idx
+                train_step = epoch * len(train_loader) + batch_idx
                 
-                logger.log_scalar('Train/BatchLoss', batch_loss, step=global_step)
-                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=global_step)
+                logger.log_scalar('Train/BatchLoss', batch_loss, step=train_step)
+                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=train_step)
 
         # epoch metrics
         epoch_loss /= len(train_loader)

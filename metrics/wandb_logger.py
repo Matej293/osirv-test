@@ -49,16 +49,21 @@ class WandbLogger(BaseLogger):
 
     def _define_metric_groups(self):
         """Define metric groups with their own step counters."""
-        wandb.define_metric("step_normalized", summary="max")
+        # step counters for different metrics
+        wandb.define_metric("train_step", summary="max")
+        wandb.define_metric("eval_step", summary="max")
         
-        wandb.define_metric("Train/BatchLoss", step_metric="step_normalized")
-        wandb.define_metric("Train/BatchAccuracy", step_metric="step_normalized")
+        # batch metrics
+        wandb.define_metric("Train/BatchLoss", step_metric="train_step")
+        wandb.define_metric("Train/BatchAccuracy", step_metric="train_step")
         
-        wandb.define_metric("Train/EpochLoss", step_metric="epoch")
-        wandb.define_metric("Train/Accuracy", step_metric="epoch")
-        wandb.define_metric("Train/LearningRate", step_metric="epoch")
+        # epoch metrics
+        wandb.define_metric("Train/EpochLoss", step_metric="train_step")
+        wandb.define_metric("Train/Accuracy", step_metric="train_step")
+        wandb.define_metric("Train/LearningRate", step_metric="train_step")
         
-        wandb.define_metric("Eval/*", step_metric="epoch")
+        # eval
+        wandb.define_metric("Eval/*", step_metric="eval_step")
     
     def log_scalar(self, tag, value, step=None):
         """Log a scalar value to wandb using the appropriate step counter."""
@@ -75,11 +80,15 @@ class WandbLogger(BaseLogger):
                 tag: value,
                 "step_normalized": normalized_step
             })
-        elif tag.startswith(("Train/Epoch", "Train/Accuracy", "Train/Learning", "Eval/")):
+        elif tag.startswith(("Train/Epoch", "Train/Accuracy", "Train/Learning")):
             wandb.log({
                 tag: value,
                 "epoch": step
             })
+        elif tag.startswith("Eval/"):
+            wandb.log({
+                tag: value, 
+                "eval_step": step})
         else:
             wandb.log({tag: value})
     
