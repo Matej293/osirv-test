@@ -11,40 +11,40 @@ class WandbLogger(BaseLogger):
     def __init__(self, project="mhist-classification", name=None, config=None, init_timeout=180):
         """Initialize wandb logger."""
         super().__init__()
-        self.config = config
-        
-        if config:
-            dataset_size = 0
-            if 'data.csv_path' in config and os.path.exists(config.get('data.csv_path')):
-                import pandas as pd
-                df = pd.read_csv(config.get('data.csv_path'))
-                dataset_size = len(df[df['Partition'] == 'train'])
-            
-            batch_size = config.get('data.batch_size', 16)
-            self.steps_per_epoch = dataset_size // batch_size if dataset_size > 0 and batch_size > 0 else 1
-        else:
-            self.steps_per_epoch = 1
-        
+        self.config = config or {}
+
+        dataset_size = 0
+        if 'data.csv_path' in self.config and os.path.exists(self.config.get('data.csv_path')):
+            import pandas as pd
+            df = pd.read_csv(self.config.get('data.csv_path'))
+            dataset_size = len(df[df['Partition'] == 'train'])
+
+        batch_size = self.config.get('data.batch_size', 16)
+        self.steps_per_epoch = dataset_size // batch_size if dataset_size > 0 and batch_size > 0 else 1
+
+        if 'training.epochs' not in self.config:
+            self.config['training.epochs'] = 10
+
         if wandb.run is not None:
             self.run = wandb.run
             if config:
                 for key, value in config.items():
                     if key not in self.run.config:
                         self.run.config[key] = value
-            
+
             self._define_metric_groups()
             return
 
         settings = wandb.Settings(init_timeout=init_timeout)
         self.run = wandb.init(
-            project=project, 
-            name=name, 
+            project=project,
+            name=name,
             config=config,
             settings=settings,
             reinit="return_previous",
             job_type="train"
         )
-        
+
         self._define_metric_groups()
 
     def _define_metric_groups(self):
@@ -65,11 +65,12 @@ class WandbLogger(BaseLogger):
         if step is None:
             wandb.log({tag: value})
             return
-        
+
         if tag.startswith("Train/Batch"):
-            total_steps = self.config.get('training.epochs') * self.steps_per_epoch
+            epochs = self.config.get('training.epochs', 10)
+            total_steps = epochs * self.steps_per_epoch if epochs and self.steps_per_epoch else 1
             normalized_step = step / total_steps if total_steps > 0 else 0
-            
+
             wandb.log({
                 tag: value,
                 "step_normalized": normalized_step
