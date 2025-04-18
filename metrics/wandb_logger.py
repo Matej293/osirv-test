@@ -117,11 +117,9 @@ class WandbLogger(BaseLogger):
             recall = recall_score(targets_np, preds_np, zero_division=0, average=average)
             f1 = f1_score(targets_np, preds_np, zero_division=0, average=average)
             
-            wandb.log({
-                "Eval/Precision": precision,
-                "Eval/Recall": recall,
-                "Eval/F1-Score": f1
-            }, step=step)
+            self.log_scalar("Eval/Precision", precision, step)
+            self.log_scalar("Eval/Recall", recall, step)
+            self.log_scalar("Eval/F1-Score", f1, step)
         except Exception as e:
             print(f"Error calculating metrics: {e}")
     
@@ -131,23 +129,26 @@ class WandbLogger(BaseLogger):
         iou = self.calculate_iou(all_preds, all_targets)
         class_metrics = self.calculate_per_class_dice_iou(all_preds, all_targets)
         
-        wandb.log({
-            "Eval/Accuracy": accuracy,
-            "Eval/Loss": avg_loss,
-            "Eval/Dice": dice,
-            "Eval/IoU": iou,
-            "Eval/Dice_HP": class_metrics['dice_hp'],
-            "Eval/Dice_SSA": class_metrics['dice_ssa'],
-            "Eval/IoU_HP": class_metrics['iou_hp'],
-            "Eval/IoU_SSA": class_metrics['iou_ssa']
-        }, step=step)
+        self.log_scalar("Eval/Accuracy", accuracy, step)
+        self.log_scalar("Eval/Loss", avg_loss, step)
+        self.log_scalar("Eval/Dice", dice, step)
+        self.log_scalar("Eval/IoU", iou, step)
+        self.log_scalar("Eval/Dice_HP", class_metrics['dice_hp'], step)
+        self.log_scalar("Eval/Dice_SSA", class_metrics['dice_ssa'], step)
+        self.log_scalar("Eval/IoU_HP", class_metrics['iou_hp'], step)
+        self.log_scalar("Eval/IoU_SSA", class_metrics['iou_ssa'], step)
         
         self.log_metrics(all_preds, all_targets, step)
         
+        if step is not None:
+            self.eval_step = max(self.eval_step, step)
+        else:
+            self.eval_step += 1
+            
         self.log_confusion_matrix(
             all_preds, all_targets,
             class_names=["HP", "SSA"], 
-            step=step
+            step=self.eval_step
         )
         
         return dice, iou
