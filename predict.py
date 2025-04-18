@@ -376,7 +376,7 @@ def main():
         
         if run_eval and args.mode is None:
             print("\n--- Running evaluation after training ---\n")
-            evaluate_model(trained_model, test_loader, device, config, logger, epoch=config.get('training.epochs'))
+            evaluate_model(trained_model, test_loader, device, config, logger, epoch=config.get('training.epochs') - 1)
             # don't run eval again
             run_eval = False
 

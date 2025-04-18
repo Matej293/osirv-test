@@ -31,8 +31,27 @@ class WandbLogger(BaseLogger):
         )
         
     def log_scalar(self, tag, value, step=None):
-        """Log a scalar value to wandb."""
-        wandb.log({tag: value}, step=step)
+        """
+        Log a scalar value to wandb with separate tracking for different metric types.
+        """
+        if not hasattr(self, '_metric_steps'):
+            self._metric_steps = {}
+        
+        # extract metric type from tag
+        metric_type = '/'.join(tag.split('/')[:2]) if '/' in tag else tag
+        
+        if metric_type not in self._metric_steps:
+            self._metric_steps[metric_type] = 0
+        
+        # ensure step is monotonically increasing
+        if step is not None:
+            if step > self._metric_steps[metric_type]:
+                self._metric_steps[metric_type] = step
+                wandb.log({tag: value}, step=step)
+            else:
+                wandb.log({tag: value})
+        else:
+            wandb.log({tag: value})
     
     def log_text(self, text, step=None):
         """Log text to W&B."""
