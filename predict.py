@@ -75,7 +75,6 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     )
     
     # Training loop
-    global_step = 0
     model.train()
     epochs = config.get('training.epochs')
     log_interval = config.get('logging.batch_log_interval')
@@ -117,24 +116,24 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
             correct += batch_correct
             total += batch_total
             
-            global_step += 1
-            
             # logging batch results
             if logger and batch_idx % log_interval == 0:
                 batch_accuracy = batch_correct / batch_total
                 
-                # Use log_scalar instead of log_metrics
-                logger.log_scalar('Train/BatchLoss', batch_loss, step=global_step)
-                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=global_step)
-                logger.log_scalar('Train/LearningRate', optimizer.param_groups[0]['lr'], step=global_step)
+                # logging epoch as decimal: 1.25 = 25% through epoch 1
+                relative_epoch = epoch + (batch_idx / len(train_loader))
+                
+                logger.log_scalar('Train/BatchLoss', batch_loss, step=relative_epoch)
+                logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=relative_epoch)
 
         # epoch metrics
         epoch_loss /= len(train_loader)
         accuracy = correct / total
 
-        logger.log_scalar('Train/EpochLoss', epoch_loss, step=global_step)
-        logger.log_scalar('Train/Accuracy', accuracy, step=global_step)
-        
+        logger.log_scalar('Train/EpochLoss', epoch_loss, step=epoch)
+        logger.log_scalar('Train/Accuracy', accuracy, step=epoch)
+        logger.log_scalar('Train/LearningRate', optimizer.param_groups[0]['lr'], step=epoch)
+
         scheduler.step(accuracy)
         
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, "
@@ -145,35 +144,59 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     if logger and isinstance(logger, WandbLogger) and wandb.run and wandb.run.sweep_id:
         is_sweep_run = True
     
-    # save the model if not a sweep run
-    if save_path and not is_sweep_run:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    # save the model
+    if save_path:
+        if is_sweep_run:
+            # for sweep runs, save model to a temp path to log as artifact and not locally
+            temp_path = f"/tmp/model_{wandb.run.id}.pth"
+            if distributed:
+                torch.save({'model_state': model.module.state_dict()}, temp_path)
+            else:
+                torch.save({'model_state': model.state_dict()}, temp_path)
 
-        if distributed:
-            torch.save({'model_state': model.module.state_dict()}, save_path)
+            if logger and isinstance(logger, WandbLogger):
+                logger.log_model(
+                    model_path=temp_path,
+                    name=f"model-{wandb.run.id}",
+                    metadata={
+                        "accuracy": accuracy,
+                        "loss": epoch_loss,
+                        "epochs": epochs,
+                        "batch_size": config.get("data.batch_size"),
+                        "learning_rate": config.get("training.learning_rate")
+                    }
+                )
+            try:
+                os.remove(temp_path)
+                print("Sweep run - model saved to WandB artifact only")
+            except:
+                print("Warning: Could not remove temporary model file")
         else:
-            torch.save({'model_state': model.state_dict()}, save_path)
-        print(f"Model saved to {save_path}")
-        
-        # Log the model as an artifact if using wandb
-        if logger and isinstance(logger, WandbLogger):
-            logger.log_model(
-                model_path=save_path,
-                metadata={
-                    "accuracy": accuracy,
-                    "loss": epoch_loss,
-                    "epochs": epochs,
-                    "batch_size": config.get("data.batch_size"),
-                    "learning_rate": config.get("training.learning_rate")
-                }
-            )
-    elif is_sweep_run:
-        print("Sweep run detected - skipping model save")
+            # for non-sweep runs, save model locally and log it
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+            if distributed:
+                torch.save({'model_state': model.module.state_dict()}, save_path)
+            else:
+                torch.save({'model_state': model.state_dict()}, save_path)
+            print(f"Model saved to {save_path}")
+            
+            if logger and isinstance(logger, WandbLogger):
+                logger.log_model(
+                    model_path=save_path,
+                    metadata={
+                        "accuracy": accuracy,
+                        "loss": epoch_loss,
+                        "epochs": epochs,
+                        "batch_size": config.get("data.batch_size"),
+                        "learning_rate": config.get("training.learning_rate")
+                    }
+                )
     
     return model
 
 # Evaluation function
-def evaluate_model(model, test_loader, device, config, logger, step=None):
+def evaluate_model(model, test_loader, device, config, logger, epoch=None):
     model.eval()
     criterion = nn.BCEWithLogitsLoss(pos_weight=config.class_weights[1])
     
@@ -207,7 +230,7 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
     avg_loss = total_loss / len(test_loader)
 
     # logging evaluation metrics
-    dice, iou = logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss, step=step)
+    dice, iou = logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss, step=epoch)
     class_metrics = logger.calculate_per_class_dice_iou(all_preds, all_targets)
 
     print(f"Evaluation — Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
@@ -236,7 +259,7 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
                 masks=sample_masks,
                 predictions=sample_preds,
                 probabilities=sample_probs,
-                step=step,
+                step=epoch,
                 logger=logger
             )
         except Exception as e:
@@ -283,8 +306,6 @@ def main():
         partition="train",
         augmentation_config=config.get('augmentation.train')
     )
-
-    final_step = len(train_loader) * config.get('training.epochs')
     
     test_loader = get_mhist_dataloader(
         config.get('data.csv_path'), 
@@ -355,7 +376,7 @@ def main():
         
         if run_eval and args.mode is None:
             print("\n--- Running evaluation after training ---\n")
-            evaluate_model(trained_model, test_loader, device, config, logger, step=final_step)
+            evaluate_model(trained_model, test_loader, device, config, logger, epoch=config.get('training.epochs'))
             # don't run eval again
             run_eval = False
 
@@ -374,7 +395,7 @@ def main():
                 print(f"Error loading model: {e}")
         
         model.to(device)
-        evaluate_model(model, test_loader, device, config, logger, step=final_step)
+        evaluate_model(model, test_loader, device, config, logger, epoch=config.get('training.epochs'))
     
     logger.close()
     
