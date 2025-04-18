@@ -12,12 +12,13 @@ class WandbLogger(BaseLogger):
         super().__init__()
         
         if wandb.run is not None:
-            print("WandbLogger: Reusing existing wandb run")
             self.run = wandb.run
             if config:
                 for key, value in config.items():
                     if key not in self.run.config:
                         self.run.config[key] = value
+            
+            self._define_metric_groups()
             return
 
         settings = wandb.Settings(init_timeout=init_timeout)
@@ -30,26 +31,32 @@ class WandbLogger(BaseLogger):
             job_type="train"
         )
         
+        self._define_metric_groups()
+
+    def _define_metric_groups(self):
+        """Define metric groups with their own step counters."""
+        # batch metrics
+        wandb.define_metric("Train/BatchLoss", step_metric="batch_step")
+        wandb.define_metric("Train/BatchAccuracy", step_metric="batch_step")
+        
+        # epoch metrics
+        wandb.define_metric("Train/EpochLoss", step_metric="epoch_step")
+        wandb.define_metric("Train/Accuracy", step_metric="epoch_step")
+        wandb.define_metric("Train/LearningRate", step_metric="epoch_step")
+        
+        # eval metrics
+        wandb.define_metric("Eval/*", step_metric="epoch_step")
+    
     def log_scalar(self, tag, value, step=None):
-        """
-        Log a scalar value to wandb with separate tracking for different metric types.
-        """
-        if not hasattr(self, '_metric_steps'):
-            self._metric_steps = {}
+        """Log a scalar value to wandb using the appropriate step counter."""
+        if step is None:
+            wandb.log({tag: value})
+            return
         
-        # extract metric type from tag
-        metric_type = '/'.join(tag.split('/')[:2]) if '/' in tag else tag
-        
-        if metric_type not in self._metric_steps:
-            self._metric_steps[metric_type] = 0
-        
-        # ensure step is monotonically increasing
-        if step is not None:
-            if step > self._metric_steps[metric_type]:
-                self._metric_steps[metric_type] = step
-                wandb.log({tag: value}, step=step)
-            else:
-                wandb.log({tag: value})
+        if tag.startswith("Train/Batch"):
+            wandb.log({tag: value, "batch_step": step})
+        elif tag.startswith(("Train/Epoch", "Train/Accuracy", "Train/Learning", "Eval/")):
+            wandb.log({tag: value, "epoch_step": step})
         else:
             wandb.log({tag: value})
     
