@@ -180,7 +180,7 @@ def distributed_sweep_train(rank, world_size, sweep_config=None, sweep_id=None):
         )
 
         if rank == 0:
-            final_step = len(train_loader) * config_manager.get('training.epochs')
+            final_epoch = config_manager.get('training.epochs') - 1
             
             model_module = model.module
             model_module.load_state_dict(torch.load(f"models/sweep_{wandb.run.id}.pth"))
@@ -191,7 +191,7 @@ def distributed_sweep_train(rank, world_size, sweep_config=None, sweep_id=None):
                 device=device,
                 config=config_manager,
                 logger=logger,
-                step=final_step
+                step=final_epoch
             )
 
     cleanup()

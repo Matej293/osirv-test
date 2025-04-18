@@ -136,7 +136,7 @@ def sweep_train(sweep_config=None):
             save_path=f"models/sweep_{wandb.run.id}.pth"
         )
 
-        final_step = len(train_loader) * config_manager.get('training.epochs')
+        final_epoch = config_manager.get('training.epochs') - 1
 
         evaluate_model(
             model=model,
@@ -144,7 +144,7 @@ def sweep_train(sweep_config=None):
             device=device,
             config=config_manager,
             logger=logger,
-            step=final_step
+            step=final_epoch
         )
 
 if __name__ == "__main__":

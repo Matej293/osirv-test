@@ -121,7 +121,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
                 batch_accuracy = batch_correct / batch_total
                 
                 # logging epoch as decimal: 1.25 = 25% through epoch 1
-                relative_epoch = epoch + (batch_idx / len(train_loader))
+                relative_epoch = int(epoch + (batch_idx / len(train_loader)) * 1000)
                 
                 logger.log_scalar('Train/BatchLoss', batch_loss, step=relative_epoch)
                 logger.log_scalar('Train/BatchAccuracy', batch_accuracy, step=relative_epoch)
@@ -196,7 +196,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     return model
 
 # Evaluation function
-def evaluate_model(model, test_loader, device, config, logger, epoch=None):
+def evaluate_model(model, test_loader, device, config, logger, step=None):
     model.eval()
     criterion = nn.BCEWithLogitsLoss(pos_weight=config.class_weights[1])
     
@@ -230,7 +230,7 @@ def evaluate_model(model, test_loader, device, config, logger, epoch=None):
     avg_loss = total_loss / len(test_loader)
 
     # logging evaluation metrics
-    dice, iou = logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss, step=epoch)
+    dice, iou = logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss, step=step)
     class_metrics = logger.calculate_per_class_dice_iou(all_preds, all_targets)
 
     print(f"Evaluation — Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
@@ -259,7 +259,7 @@ def evaluate_model(model, test_loader, device, config, logger, epoch=None):
                 masks=sample_masks,
                 predictions=sample_preds,
                 probabilities=sample_probs,
-                step=epoch,
+                step=step,
                 logger=logger
             )
         except Exception as e:
@@ -395,7 +395,7 @@ def main():
                 print(f"Error loading model: {e}")
         
         model.to(device)
-        evaluate_model(model, test_loader, device, config, logger, epoch=config.get('training.epochs'))
+        evaluate_model(model, test_loader, device, config, logger, step=config.get('training.epochs') - 1)
     
     logger.close()
     
