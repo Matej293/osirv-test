@@ -3,94 +3,68 @@ import numpy as np
 import wandb
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_score, recall_score, f1_score
-import os
 
 from metrics.base_logger import BaseLogger
 
 class WandbLogger(BaseLogger):
-    def __init__(self, project="mhist-classification", name=None, config=None, init_timeout=180):
-        """Initialize wandb logger."""
+    def __init__(self, project=None, name=None, config=None):
         super().__init__()
-        self.config = config or {}
-
-        dataset_size = 0
-        if 'data.csv_path' in self.config and os.path.exists(self.config.get('data.csv_path')):
-            import pandas as pd
-            df = pd.read_csv(self.config.get('data.csv_path'))
-            dataset_size = len(df[df['Partition'] == 'train'])
-
-        batch_size = self.config.get('data.batch_size', 16)
-        self.steps_per_epoch = dataset_size // batch_size if dataset_size > 0 and batch_size > 0 else 1
-
-        if 'training.epochs' not in self.config:
-            self.config['training.epochs'] = 10
-
-        if wandb.run is not None:
-            self.run = wandb.run
-            if config:
-                for key, value in config.items():
-                    if key not in self.run.config:
-                        self.run.config[key] = value
-
-            self._define_metric_groups()
-            return
-
-        settings = wandb.Settings(init_timeout=init_timeout)
-        self.run = wandb.init(
-            project=project,
-            name=name,
-            config=config,
-            settings=settings,
-            reinit="return_previous",
-            job_type="train"
-        )
-
+        self.project = project
+        self.name = name
+        self.config = config
+        
+        self.train_batch_step = 0
+        self.train_epoch_step = 0
+        self.eval_step = 0
+        
+        if wandb.run is None:
+            wandb.init(project=project, name=name, config=config)
+        
         self._define_metric_groups()
-
+    
     def _define_metric_groups(self):
         """Define metric groups with their own step counters."""
-        # step counters for different metrics
-        wandb.define_metric("train_step", summary="max")
+        wandb.define_metric("train_batch_step", summary="max")
+        wandb.define_metric("train_epoch_step", summary="max")
         wandb.define_metric("eval_step", summary="max")
         
-        # batch metrics
-        wandb.define_metric("Train/BatchLoss", step_metric="train_step")
-        wandb.define_metric("Train/BatchAccuracy", step_metric="train_step")
+        wandb.define_metric("Train/Batch*", step_metric="train_batch_step")
         
-        # epoch metrics
-        wandb.define_metric("Train/EpochLoss", step_metric="train_step")
-        wandb.define_metric("Train/Accuracy", step_metric="train_step")
-        wandb.define_metric("Train/LearningRate", step_metric="train_step")
+        wandb.define_metric("Train/Epoch*", step_metric="train_epoch_step")
+        wandb.define_metric("Train/Accuracy", step_metric="train_epoch_step")
+        wandb.define_metric("Train/LearningRate", step_metric="train_epoch_step")
         
-        # eval
         wandb.define_metric("Eval/*", step_metric="eval_step")
     
     def log_scalar(self, tag, value, step=None):
-        """Log a scalar value to wandb using the appropriate step counter."""
-        if step is None:
-            wandb.log({tag: value})
-            return
-
+        """Log a scalar value with the appropriate step counter."""
+        log_dict = {tag: value}
+        
         if tag.startswith("Train/Batch"):
-            epochs = self.config.get('training.epochs', 10)
-            total_steps = epochs * self.steps_per_epoch if epochs and self.steps_per_epoch else 1
-            normalized_step = step / total_steps if total_steps > 0 else 0
-
-            wandb.log({
-                tag: value,
-                "step_normalized": normalized_step
-            })
-        elif tag.startswith(("Train/Epoch", "Train/Accuracy", "Train/Learning")):
-            wandb.log({
-                tag: value,
-                "epoch": step
-            })
+            if step is not None:
+                self.train_batch_step = max(self.train_batch_step, step)
+            else:
+                self.train_batch_step += 1
+            
+            log_dict["train_batch_step"] = self.train_batch_step
+        
+        elif tag.startswith("Train/"):
+            if step is not None:
+                self.train_epoch_step = max(self.train_epoch_step, step)
+            else:
+                self.train_epoch_step += 1
+                
+            log_dict["train_epoch_step"] = self.train_epoch_step
+        
         elif tag.startswith("Eval/"):
-            wandb.log({
-                tag: value, 
-                "eval_step": step})
-        else:
-            wandb.log({tag: value})
+            if step is not None:
+                self.eval_step = max(self.eval_step, step)
+            else:
+                self.eval_step += 1
+                
+            log_dict["eval_step"] = self.eval_step
+        
+        wandb.log(log_dict)
     
     def log_text(self, text, step=None):
         """Log text to W&B."""
