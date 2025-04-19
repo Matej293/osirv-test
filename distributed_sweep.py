@@ -216,10 +216,16 @@ def run_sweep():
             )
         
         wandb.agent(sweep_id, function=distributed_agent, count=200)
+        from sweep import cleanup_wandb_directories
+        cleanup_wandb_directories()
+        print("Sweep completed. All runs cleaned up.")
     else:
         print("Only one GPU found, using single GPU training")
-        from sweep import sweep_train
+        from sweep import sweep_train, cleanup_wandb_directories
         wandb.agent(sweep_id, function=sweep_train, count=200)
+        cleanup_wandb_directories()
+        print("Sweep completed. All runs cleaned up.")
+        
 
 if __name__ == "__main__":
     run_sweep()

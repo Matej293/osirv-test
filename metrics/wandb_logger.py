@@ -15,13 +15,21 @@ class WandbLogger(BaseLogger):
         self.project = project
         self.name = name
         self.config = config
+
+        # set up wandb directory
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        wandb_dir = os.path.join(project_root, "wandb")
+        os.makedirs(wandb_dir, exist_ok=True)
+        os.environ["WANDB_DIR"] = wandb_dir
         
         self.train_batch_step = 0
         self.train_epoch_step = 1
         self.eval_step = 1
         
-        if wandb.run is None:
+        try:
             wandb.init(project=project, name=name, config=config)
+        except Exception as e:
+            print(f"Failed to initialize wandb: {e}")
         
         self._define_metric_groups()
     

@@ -147,6 +147,22 @@ def sweep_train(sweep_config=None):
             step=final_epoch
         )
 
+def cleanup_wandb_directories():
+    """Clean up wandb directories after sweep completion."""
+    import shutil
+    import os
+    
+    wandb_dir = os.environ.get("WANDB_DIR")
+    
+    if not wandb_dir or not os.path.exists(wandb_dir):
+        print("Could not locate wandb directory")
+        return
+        
+    print(f"Cleaning wandb runs directory...")
+    shutil.rmtree(wandb_dir)
+    os.makedirs(wandb_dir)
+    print(f"Successfully cleaned wandb runs directory")
+
 if __name__ == "__main__":
     with open("config/sweep_config.yaml", "r") as file:
         sweep_config = yaml.safe_load(file)
@@ -155,3 +171,6 @@ if __name__ == "__main__":
     print(f"Sweep initialized with ID: {sweep_id}")
     
     wandb.agent(sweep_id, function=sweep_train, count=200)
+
+    cleanup_wandb_directories()
+    print("Sweep completed. All runs cleaned up.")
