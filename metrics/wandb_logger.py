@@ -1,6 +1,9 @@
+import os
+import shutil
 import torch
 import numpy as np
 import wandb
+from pathlib import Path
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_score, recall_score, f1_score, fbeta_score
 
@@ -168,7 +171,8 @@ class WandbLogger(BaseLogger):
         return dice, iou
     
     def log_model(self, model_path, name=None, metadata=None):
-        """Log model as a wandb artifact."""
+        """Log model as a wandb artifact and clean up after uploading."""
+        
         model_artifact = wandb.Artifact(
             name or "mhist-model", 
             type="model",
@@ -176,7 +180,35 @@ class WandbLogger(BaseLogger):
             metadata=metadata
         )
         model_artifact.add_file(model_path)
-        wandb.log_artifact(model_artifact)
+        
+        artifact_ref = wandb.log_artifact(model_artifact)
+        
+        # force sync
+        wandb.run.log({})
+        wandb.run._backend.interface.publish_artifacts()
+        
+        print(f"Model uploaded as artifact: {artifact_ref.name}:{artifact_ref.version}")
+        
+        # cleaning up cache
+        try:
+            cache_dir = os.environ.get("WANDB_CACHE_DIR", 
+                                      os.path.join(Path.home(), ".cache", "wandb"))
+            artifacts_dir = os.path.join(cache_dir, "artifacts")
+            
+            if os.path.exists(artifacts_dir):
+                size_before = sum(
+                    os.path.getsize(os.path.join(dirpath, f))
+                    for dirpath, dirnames, filenames in os.walk(artifacts_dir)
+                    for f in filenames if os.path.exists(os.path.join(dirpath, f))
+                ) / (1024 * 1024)  # MB
+                
+                print(f"Cleaning wandb artifacts cache (size: {size_before:.2f} MB)")
+                shutil.rmtree(artifacts_dir)
+                os.makedirs(artifacts_dir)
+                
+                print(f"Successfully cleaned wandb artifacts cache")
+        except Exception as e:
+            print(f"Warning: Could not clean wandb artifacts cache: {e}")
     
     def close(self):
         """Finish the wandb run."""
