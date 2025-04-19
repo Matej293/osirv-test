@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import wandb
 import matplotlib.pyplot as plt
-from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.metrics import precision_score, recall_score, f1_score, fbeta_score
 
 from metrics.base_logger import BaseLogger
 
@@ -156,16 +156,11 @@ class WandbLogger(BaseLogger):
             precision = precision_score(targets_np, preds_np, zero_division=0, average=average)
             recall = recall_score(targets_np, preds_np, zero_division=0, average=average)
             f1 = f1_score(targets_np, preds_np, zero_division=0, average=average)
+            f2 = fbeta_score(targets_np, preds_np, beta=2, zero_division=0, average=average)
             
             self.log_scalar("Eval/Precision", precision, step)
-            self.log_scalar("Eval/Recall", recall, step)
             self.log_scalar("Eval/F1-Score", f1, step)
-            
-            cm = confusion_matrix(targets_np, preds_np)
-            
-            # overall metrics
-            tn, fp, fn, tp = cm.ravel() if cm.size == 4 else confusion_matrix(targets_np, preds_np, labels=[0, 1]).ravel()
-            overall_recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            self.log_scalar("Eval/F2-Score", f2, step)
             
             # class-specific metrics
             ssa_indices = np.where(np.array(targets_np) == 1)[0]
@@ -181,8 +176,8 @@ class WandbLogger(BaseLogger):
             hp_true = np.array(targets_np)[hp_indices]
             hp_recall = np.sum(hp_pred == 0) / len(hp_indices) if len(hp_indices) > 0 else 0
             
-            # logging all recall metrics
-            self.log_scalar("Eval/Recall", overall_recall, step)  
+            # logging class-specific recall metrics
+            self.log_scalar("Eval/Recall", recall, step)
             self.log_scalar("Eval/Recall_SSA", ssa_recall, step)
             self.log_scalar("Eval/Recall_HP", hp_recall, step)
         except Exception as e:
