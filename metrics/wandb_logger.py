@@ -185,7 +185,7 @@ class WandbLogger(BaseLogger):
         
         # force sync
         wandb.run.log({})
-        wandb.run._backend.interface.publish_artifacts()
+        wandb.run._backend.interface.publish_artifact()
         
         print(f"Model uploaded as artifact: {artifact_ref.name}:{artifact_ref.version}")
         
