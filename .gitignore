@@ -39,3 +39,4 @@ ENV/
 *.log
 logs/
 *.csv
+*.png
