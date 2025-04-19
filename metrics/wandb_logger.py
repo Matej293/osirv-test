@@ -66,12 +66,8 @@ class WandbLogger(BaseLogger):
         
         wandb.log(log_dict)
     
-    def log_text(self, text, step=None):
-        """Log text to W&B."""
-        wandb.log({"Text": wandb.Html(text)}, step=step)
-
     def log_images(self, tag, images, step=None, max_images=4):
-        """Log images to wandb."""
+        """Log images to wandb with appropriate step counter."""
         if images is None or len(images) == 0:
             print(f"Warning: No images to log for {tag}")
             return
@@ -85,12 +81,56 @@ class WandbLogger(BaseLogger):
                 images_to_log.append(wandb.Image(img))
             else:
                 images_to_log.append(wandb.Image(images[i]))
-                
-        wandb.log({tag: images_to_log}, step=step)
+        
+        log_dict = {tag: images_to_log}
+        
+        # Apply same step counter logic
+        if tag.startswith("Eval/"):
+            if step is not None:
+                self.eval_step = max(self.eval_step, step)
+            else:
+                self.eval_step += 1
+            log_dict["eval_step"] = self.eval_step
+        elif tag.startswith("Train/Batch"):
+            if step is not None:
+                self.train_batch_step = max(self.train_batch_step, step)
+            else:
+                self.train_batch_step += 1
+            log_dict["train_batch_step"] = self.train_batch_step
+        else:
+            if step is not None:
+                self.train_epoch_step = max(self.train_epoch_step, step)
+            else:
+                self.train_epoch_step += 1
+            log_dict["train_epoch_step"] = self.train_epoch_step
+            
+        wandb.log(log_dict)
     
     def _log_figure(self, tag, figure, step=None):
-        """Log a matplotlib figure to W&B."""
-        wandb.log({tag: wandb.Image(figure)}, step=step)
+        """Log a matplotlib figure to W&B with appropriate step counter."""
+        log_dict = {tag: wandb.Image(figure)}
+        
+        # Apply same step counter logic
+        if tag.startswith("Eval/"):
+            if step is not None:
+                self.eval_step = max(self.eval_step, step)
+            else:
+                self.eval_step += 1
+            log_dict["eval_step"] = self.eval_step
+        elif tag.startswith("Train/Batch"):
+            if step is not None:
+                self.train_batch_step = max(self.train_batch_step, step)
+            else:
+                self.train_batch_step += 1
+            log_dict["train_batch_step"] = self.train_batch_step
+        else:
+            if step is not None:
+                self.train_epoch_step = max(self.train_epoch_step, step)
+            else:
+                self.train_epoch_step += 1
+            log_dict["train_epoch_step"] = self.train_epoch_step
+            
+        wandb.log(log_dict)
     
     def log_predictions(self, images, preds, targets, step, tag_prefix="Eval"):
         """Log input images, predictions, and ground truth."""
@@ -102,6 +142,9 @@ class WandbLogger(BaseLogger):
         """Create and log a confusion matrix."""
         try:
             fig = self.create_confusion_matrix_figure(preds, targets, class_names)
+            # If it's an evaluation confusion matrix, prefix with Eval/
+            if tag == "ConfusionMatrix":
+                tag = f"Eval/{tag}"
             self._log_figure(tag, fig, step)
             plt.close(fig)
         except Exception as e:

@@ -15,13 +15,6 @@ class TensorboardLogger(BaseLogger):
         """Log a scalar value to TensorBoard."""
         self.writer.add_scalar(tag, value, step)
     
-    def log_text(self, text, step=None):
-        """Log text to TensorBoard."""
-        if step is not None:
-            self.writer.add_text("Text", text, step)
-        else:
-            self.writer.add_text("Text", text)
-
     def log_images(self, tag, images, step, max_images=4):
         """Log images to TensorBoard."""
         if images is None or len(images) == 0:
