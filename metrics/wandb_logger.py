@@ -180,15 +180,12 @@ class WandbLogger(BaseLogger):
             metadata=metadata
         )
         model_artifact.add_file(model_path)
-        
         artifact_ref = wandb.log_artifact(model_artifact)
+        artifact_ref.wait()
         
-        # force sync
-        wandb.run.log({})
-        wandb.run._backend.interface.publish_artifact()
-        
+        wandb.log({})
         print(f"Model uploaded as artifact: {artifact_ref.name}:{artifact_ref.version}")
-        
+
         # cleaning up cache
         try:
             cache_dir = os.environ.get("WANDB_CACHE_DIR", 
