@@ -1,9 +1,7 @@
 method: bayes
-metrics:
-  - name: Eval/Recall_SSA
-    goal: maximize
-  - name: Eval/F2-Score
-    goal: maximize
+metric:
+  name: Eval/Recall_SSA
+  goal: maximize
 parameters:
   training.learning_rate:
     distribution: log_uniform_values
