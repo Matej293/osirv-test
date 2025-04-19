@@ -36,34 +36,31 @@ class WandbLogger(BaseLogger):
         
         wandb.define_metric("Eval/*", step_metric="eval_step")
     
-    def log_scalar(self, tag, value, step=None):
-        """Log a scalar value with the appropriate step counter."""
-        log_dict = {tag: value}
-        
-        if tag.startswith("Train/Batch"):
+    def _update_step_counter(self, tag, log_dict, step=None):
+        """Update the appropriate step counter based on the tag prefix and add it to log_dict."""
+        if tag.startswith("Eval/"):
+            if step is not None:
+                self.eval_step = max(self.eval_step, step)
+            log_dict["eval_step"] = self.eval_step
+        elif tag.startswith("Train/Batch"):
             if step is not None:
                 self.train_batch_step = max(self.train_batch_step, step)
             else:
                 self.train_batch_step += 1
-            
             log_dict["train_batch_step"] = self.train_batch_step
-        
-        elif tag.startswith("Train/"):
+        else:
             if step is not None:
                 self.train_epoch_step = max(self.train_epoch_step, step)
             else:
                 self.train_epoch_step += 1
-                
             log_dict["train_epoch_step"] = self.train_epoch_step
         
-        elif tag.startswith("Eval/"):
-            if step is not None:
-                self.eval_step = max(self.eval_step, step)
-            else:
-                self.eval_step += 1
-                
-            log_dict["eval_step"] = self.eval_step
-        
+        return log_dict
+
+    def log_scalar(self, tag, value, step=None):
+        """Log a scalar value with the appropriate step counter."""
+        log_dict = {tag: value}
+        log_dict = self._update_step_counter(tag, log_dict, step)
         wandb.log(log_dict)
     
     def log_images(self, tag, images, step=None, max_images=4):
@@ -83,51 +80,13 @@ class WandbLogger(BaseLogger):
                 images_to_log.append(wandb.Image(images[i]))
         
         log_dict = {tag: images_to_log}
-        
-        if tag.startswith("Eval/"):
-            if step is not None:
-                self.eval_step = max(self.eval_step, step)
-            else:
-                self.eval_step += 1
-            log_dict["eval_step"] = self.eval_step
-        elif tag.startswith("Train/Batch"):
-            if step is not None:
-                self.train_batch_step = max(self.train_batch_step, step)
-            else:
-                self.train_batch_step += 1
-            log_dict["train_batch_step"] = self.train_batch_step
-        else:
-            if step is not None:
-                self.train_epoch_step = max(self.train_epoch_step, step)
-            else:
-                self.train_epoch_step += 1
-            log_dict["train_epoch_step"] = self.train_epoch_step
-            
+        log_dict = self._update_step_counter(tag, log_dict, step)
         wandb.log(log_dict)
     
     def _log_figure(self, tag, figure, step=None):
         """Log a matplotlib figure to W&B with appropriate step counter."""
         log_dict = {tag: wandb.Image(figure)}
-        
-        if tag.startswith("Eval/"):
-            if step is not None:
-                self.eval_step = max(self.eval_step, step)
-            else:
-                self.eval_step += 1
-            log_dict["eval_step"] = self.eval_step
-        elif tag.startswith("Train/Batch"):
-            if step is not None:
-                self.train_batch_step = max(self.train_batch_step, step)
-            else:
-                self.train_batch_step += 1
-            log_dict["train_batch_step"] = self.train_batch_step
-        else:
-            if step is not None:
-                self.train_epoch_step = max(self.train_epoch_step, step)
-            else:
-                self.train_epoch_step += 1
-            log_dict["train_epoch_step"] = self.train_epoch_step
-            
+        log_dict = self._update_step_counter(tag, log_dict, step)
         wandb.log(log_dict)
     
     def log_predictions(self, images, preds, targets, step, tag_prefix="Eval"):
@@ -200,15 +159,10 @@ class WandbLogger(BaseLogger):
         
         self.log_metrics(all_preds, all_targets, step)
         
-        if step is not None:
-            self.eval_step = max(self.eval_step, step)
-        else:
-            self.eval_step += 1
-            
         self.log_confusion_matrix(
             all_preds, all_targets,
             class_names=["HP", "SSA"], 
-            step=self.eval_step
+            step=step
         )
         
         return dice, iou
