@@ -14,8 +14,8 @@ class WandbLogger(BaseLogger):
         self.config = config
         
         self.train_batch_step = 0
-        self.train_epoch_step = 0
-        self.eval_step = 0
+        self.train_epoch_step = 1
+        self.eval_step = 1
         
         if wandb.run is None:
             wandb.init(project=project, name=name, config=config)
