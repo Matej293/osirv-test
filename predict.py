@@ -262,6 +262,8 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
         except Exception as e:
             print(f"Warning: Could not visualize segmentation results: {e}")
 
+    return dice, iou
+
 # Main function
 def main():
     parser = get_argparser()

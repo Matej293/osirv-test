@@ -38,3 +38,4 @@ venv/
 ENV/
 *.log
 logs/
+*.csv

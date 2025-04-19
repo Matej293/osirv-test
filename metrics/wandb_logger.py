@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import wandb
 import matplotlib.pyplot as plt
-from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 
 from metrics.base_logger import BaseLogger
 
@@ -84,7 +84,6 @@ class WandbLogger(BaseLogger):
         
         log_dict = {tag: images_to_log}
         
-        # Apply same step counter logic
         if tag.startswith("Eval/"):
             if step is not None:
                 self.eval_step = max(self.eval_step, step)
@@ -110,7 +109,6 @@ class WandbLogger(BaseLogger):
         """Log a matplotlib figure to W&B with appropriate step counter."""
         log_dict = {tag: wandb.Image(figure)}
         
-        # Apply same step counter logic
         if tag.startswith("Eval/"):
             if step is not None:
                 self.eval_step = max(self.eval_step, step)
@@ -142,7 +140,6 @@ class WandbLogger(BaseLogger):
         """Create and log a confusion matrix."""
         try:
             fig = self.create_confusion_matrix_figure(preds, targets, class_names)
-            # If it's an evaluation confusion matrix, prefix with Eval/
             if tag == "ConfusionMatrix":
                 tag = f"Eval/{tag}"
             self._log_figure(tag, fig, step)
@@ -163,6 +160,31 @@ class WandbLogger(BaseLogger):
             self.log_scalar("Eval/Precision", precision, step)
             self.log_scalar("Eval/Recall", recall, step)
             self.log_scalar("Eval/F1-Score", f1, step)
+            
+            cm = confusion_matrix(targets_np, preds_np)
+            
+            # overall metrics
+            tn, fp, fn, tp = cm.ravel() if cm.size == 4 else confusion_matrix(targets_np, preds_np, labels=[0, 1]).ravel()
+            overall_recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            
+            # class-specific metrics
+            ssa_indices = np.where(np.array(targets_np) == 1)[0]
+            hp_indices = np.where(np.array(targets_np) == 0)[0]
+            
+            # SSA
+            ssa_pred = np.array(preds_np)[ssa_indices]
+            ssa_true = np.array(targets_np)[ssa_indices]
+            ssa_recall = np.sum(ssa_pred == 1) / len(ssa_indices) if len(ssa_indices) > 0 else 0
+            
+            # HP
+            hp_pred = np.array(preds_np)[hp_indices]
+            hp_true = np.array(targets_np)[hp_indices]
+            hp_recall = np.sum(hp_pred == 0) / len(hp_indices) if len(hp_indices) > 0 else 0
+            
+            # logging all recall metrics
+            self.log_scalar("Eval/Recall", overall_recall, step)  
+            self.log_scalar("Eval/Recall_SSA", ssa_recall, step)
+            self.log_scalar("Eval/Recall_HP", hp_recall, step)
         except Exception as e:
             print(f"Error calculating metrics: {e}")
     

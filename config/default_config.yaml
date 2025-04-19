@@ -22,7 +22,7 @@ training:
   epochs: 10
   learning_rate: 9.61752e-05
   weight_decay: 0.00041668
-  ssa_threshold: 0.45
+  ssa_threshold: 0.32
   hp_threshold: 0.5
   scheduler:
     mode: "max"
