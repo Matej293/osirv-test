@@ -268,7 +268,6 @@ def create_uncertainty_visualization(images, probabilities, step, logger, batch_
         ax_exp.text(0.5, 0.5, explanation_text, ha='center', va='center', 
                    fontsize=12, bbox=dict(boxstyle="round,pad=0.5", fc="white", alpha=0.9))
         
-        plt.tight_layout()
         logger._log_figure("Viz/UncertaintyExplanation", fig, step=step)
         plt.close(fig)
         

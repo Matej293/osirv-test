@@ -184,7 +184,7 @@ class WandbLogger(BaseLogger):
         artifact_ref.wait()
         
         wandb.log({})
-        print(f"Model uploaded as artifact: {artifact_ref.name}:{artifact_ref.version}")
+        print(f"Model uploaded as artifact: {artifact_ref.name}")
 
         # cleaning up cache
         try:
