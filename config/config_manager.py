@@ -77,8 +77,7 @@ class ConfigManager:
             'epochs': 'training.epochs',
             'lr': 'training.learning_rate',
             'weight_decay': 'training.weight_decay',
-            'ssa_threshold': 'training.ssa_threshold',
-            'hp_threshold': 'training.hp_threshold',
+            'threshold': 'training.threshold',
         }
         
         for arg_name, config_path in arg_mapping.items():

@@ -39,13 +39,11 @@ def distributed_sweep_train(rank, world_size, sweep_config=None, sweep_id=None):
         if 'data.batch_size' in wandb_params:
             # per-gpu batch size
             args.batch_size = int(wandb_params['data.batch_size']) // world_size
-        if 'training.ssa_threshold' in wandb_params:
-            args.ssa_threshold = float(wandb_params['training.ssa_threshold'])
-        if 'training.hp_threshold' in wandb_params:
-            args.hp_threshold = float(wandb_params['training.hp_threshold'])
+        if 'training.threshold' in wandb_params:
+            args.threshold = float(wandb_params['training.threshold'])
 
         # manually set the epochs for sweep runs
-        args.epochs = 10
+        args.epochs = 15
         
         config_manager.update_from_args(args)
         
@@ -154,8 +152,7 @@ def distributed_sweep_train(rank, world_size, sweep_config=None, sweep_id=None):
             print(f"Weight Decay: {config_manager.get('training.weight_decay')}")
             print(f"Epochs: {config_manager.get('training.epochs')}")
             print(f"Batch Size: {config_manager.get('data.batch_size')} (per process: {config_manager.get('data.batch_size') // world_size})")
-            print(f"SSA Threshold: {config_manager.get('training.ssa_threshold')}")
-            print(f"HP Threshold: {config_manager.get('training.hp_threshold')}")
+            print(f"Threshold: {config_manager.get('training.threshold')}")
             print("\nAugmentation parameters:")
             for key, value in config_manager.get('augmentation.train').items():
                 print(f"{key}: {value}")

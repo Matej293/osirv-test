@@ -5,35 +5,43 @@ import numpy as np
 import wandb
 from pathlib import Path
 import matplotlib.pyplot as plt
-from sklearn.metrics import precision_score, recall_score, f1_score, fbeta_score
 
 from metrics.base_logger import BaseLogger
 
 class WandbLogger(BaseLogger):
+    """Weights & Biases implementation of the BaseLogger."""
+    
     def __init__(self, project=None, name=None, config=None, reuse=False):
+        """Initialize the WandB logger.
+        
+        Args:
+            project: WandB project name
+            name: WandB run name
+            config: Configuration to log
+            reuse: Whether to reuse an existing run
+        """
         super().__init__()
         self.project = project
         self.name = name
         self.config = config
+        self.train_batch_step = 0
+        self.train_epoch_step = 1
+        self.eval_step = 1
 
-        # set up wandb directory
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         wandb_dir = os.path.join(project_root, "wandb")
         os.makedirs(wandb_dir, exist_ok=True)
         os.environ["WANDB_DIR"] = wandb_dir
         
-        self.train_batch_step = 0
-        self.train_epoch_step = 1
-        self.eval_step = 1
-        
         if not reuse and wandb.run is None:
             try:
                 wandb.init(project=project, name=name, config=config)
+                self._define_metric_groups()
             except Exception as e:
                 print(f"Failed to initialize wandb: {e}")
-        
-        self._define_metric_groups()
-    
+        elif not reuse:
+            self._define_metric_groups()
+            
     def _define_metric_groups(self):
         """Define metric groups with their own step counters."""
         wandb.define_metric("train_batch_step", summary="max")
@@ -45,11 +53,21 @@ class WandbLogger(BaseLogger):
         wandb.define_metric("Train/Epoch*", step_metric="train_epoch_step")
         wandb.define_metric("Train/Accuracy", step_metric="train_epoch_step")
         wandb.define_metric("Train/LearningRate", step_metric="train_epoch_step")
-        
+        wandb.define_metric("Train/WeightDecay", step_metric="train_epoch_step")
+
         wandb.define_metric("Eval/*", step_metric="eval_step")
-    
+        
     def _update_step_counter(self, tag, log_dict, step=None):
-        """Update the appropriate step counter based on the tag prefix and add it to log_dict."""
+        """Update the appropriate step counter based on the tag prefix.
+        
+        Args:
+            tag: Metric tag
+            log_dict: Dictionary to log
+            step: Optional step value
+            
+        Returns:
+            Updated log_dict with step counter
+        """
         if tag.startswith("Eval/"):
             if step is not None:
                 self.eval_step = max(self.eval_step, step)
@@ -68,17 +86,32 @@ class WandbLogger(BaseLogger):
             log_dict["train_epoch_step"] = self.train_epoch_step
         
         return log_dict
-
+        
     def log_scalar(self, tag, value, step=None):
-        """Log a scalar value with the appropriate step counter."""
+        """Log a scalar value.
+        
+        Args:
+            tag: Metric name
+            value: Value to log
+            step: Optional step value
+        """
+        if value is None:
+            return
+            
         log_dict = {tag: value}
         log_dict = self._update_step_counter(tag, log_dict, step)
         wandb.log(log_dict)
-    
+        
     def log_images(self, tag, images, step=None, max_images=4):
-        """Log images to wandb with appropriate step counter."""
+        """Log images to wandb.
+        
+        Args:
+            tag: Image group name
+            images: List of images (tensors or numpy arrays)
+            step: Optional step value
+            max_images: Maximum number of images to log
+        """
         if images is None or len(images) == 0:
-            print(f"Warning: No images to log for {tag}")
             return
         
         images_to_log = []
@@ -94,70 +127,104 @@ class WandbLogger(BaseLogger):
         log_dict = {tag: images_to_log}
         log_dict = self._update_step_counter(tag, log_dict, step)
         wandb.log(log_dict)
-    
+        
     def _log_figure(self, tag, figure, step=None):
-        """Log a matplotlib figure to W&B with appropriate step counter."""
+        """Log a matplotlib figure.
+        
+        Args:
+            tag: Figure name
+            figure: Matplotlib figure
+            step: Optional step value
+        """
         log_dict = {tag: wandb.Image(figure)}
         log_dict = self._update_step_counter(tag, log_dict, step)
         wandb.log(log_dict)
+        plt.close(figure)
     
     def log_predictions(self, images, preds, targets, step, tag_prefix="Eval"):
-        """Log input images, predictions, and ground truth."""
+        """Log input images, predictions, and ground truth.
+        
+        Args:
+            images: Input images
+            preds: Prediction masks/labels
+            targets: Ground truth masks/labels
+            step: Step value
+            tag_prefix: Prefix for the tag
+        """
         self.log_images(f"{tag_prefix}/Input", images, step)
         self.log_images(f"{tag_prefix}/Prediction", preds, step)
         self.log_images(f"{tag_prefix}/GroundTruth", targets, step)
-    
+        
     def log_confusion_matrix(self, preds, targets, class_names, step=None, tag="ConfusionMatrix"):
-        """Create and log a confusion matrix."""
+        """Create and log a confusion matrix.
+        
+        Args:
+            preds: Predicted labels
+            targets: Ground truth labels
+            class_names: List of class names
+            step: Optional step value
+            tag: Tag for the confusion matrix
+        """
         try:
             fig = self.create_confusion_matrix_figure(preds, targets, class_names)
             if tag == "ConfusionMatrix":
                 tag = f"Eval/{tag}"
             self._log_figure(tag, fig, step)
-            plt.close(fig)
         except Exception as e:
             print(f"Error creating confusion matrix: {e}")
-    
-    def log_metrics(self, preds, targets, step, average="binary"):
-        """Calculate and log classification metrics."""
+            
+    def log_evaluation_metrics(self, all_preds, all_targets, accuracy=None, avg_loss=None, step=None, 
+                              class_names=["HP", "SSA"], tag_prefix="Eval"):
+        """Log evaluation metrics.
+        
+        Args:
+            all_preds: All predictions
+            all_targets: All targets
+            accuracy: Optional precalculated accuracy
+            avg_loss: Optional average loss
+            step: Optional step value
+            class_names: List of class names
+            tag_prefix: Prefix for metric tags
+            
+        Returns:
+            Dictionary of metrics
+        """
         try:
-            preds_np = self._ensure_numpy_int(preds)
-            targets_np = self._ensure_numpy_int(targets)
+            preds_np = self._ensure_numpy_int(all_preds)
+            targets_np = self._ensure_numpy_int(all_targets)
+
+            metrics = self.calculate_metrics(preds_np, targets_np)
             
-            precision = precision_score(targets_np, preds_np, zero_division=0, average=average)
-            recall = recall_score(targets_np, preds_np, zero_division=0, average=average)
-            f1 = f1_score(targets_np, preds_np, zero_division=0, average=average)
-            f2 = fbeta_score(targets_np, preds_np, beta=2, zero_division=0, average=average)
+            if accuracy is not None:
+                metrics['accuracy'] = accuracy
+            if avg_loss is not None:
+                metrics['loss'] = avg_loss
             
-            self.log_scalar("Eval/Precision", precision, step)
-            self.log_scalar("Eval/F1-Score", f1, step)
-            self.log_scalar("Eval/F2-Score", f2, step)
-            self.log_scalar("Eval/Recall", recall, step)
+            for metric_name, value in metrics.items():
+                if value is not None:
+                    metric_tag = f"{tag_prefix}/{metric_name.capitalize()}"
+                    self.log_scalar(metric_tag, value, step)
+            
+            self.log_confusion_matrix(preds_np, targets_np, class_names=class_names, step=step)
+            
+            return metrics
+            
         except Exception as e:
-            print(f"Error calculating metrics: {e}")
-    
-    def log_evaluation(self, all_preds, all_targets, accuracy, avg_loss, step=None):
-        """Log full evaluation results."""
-        f1 = self.calculate_f1_coefficient(all_preds, all_targets)
-        iou = self.calculate_iou(all_preds, all_targets)
-        
-        self.log_scalar("Eval/Accuracy", accuracy, step)
-        self.log_scalar("Eval/Loss", avg_loss, step)
-        self.log_scalar("Eval/IoU", iou, step)
-        
-        self.log_metrics(all_preds, all_targets, step)
-        
-        self.log_confusion_matrix(
-            all_preds, all_targets,
-            class_names=["HP", "SSA"], 
-            step=step
-        )
-        
-        return f1, iou
-    
+            print(f"Error in log_evaluation_metrics: {e}")
+            return {}
+            
     def log_model(self, model_path, name=None, metadata=None):
-        """Log model as a wandb artifact and clean up after uploading."""
+        """Log model as a wandb artifact and clean up after uploading.
         
+        Args:
+            model_path: Path to the model file
+            name: Optional name for the artifact
+            metadata: Optional metadata dictionary
+        """
+        if not os.path.exists(model_path):
+            print(f"Error: Model file not found at {model_path}")
+            return
+            
         model_artifact = wandb.Artifact(
             name or "mhist-model", 
             type="model",
@@ -165,11 +232,16 @@ class WandbLogger(BaseLogger):
             metadata=metadata
         )
         model_artifact.add_file(model_path)
-        artifact_ref = wandb.log_artifact(model_artifact)
-        artifact_ref.wait()
         
-        wandb.log({})
-        print(f"Model uploaded as artifact: {artifact_ref.name}")
+        try:
+            artifact_ref = wandb.log_artifact(model_artifact)
+            artifact_ref.wait()
+            
+            wandb.log({})
+            print(f"Model uploaded as artifact: {artifact_ref.name}")
+        except Exception as e:
+            print(f"Error uploading model artifact: {e}")
+            return
 
         # cleaning up cache
         try:
@@ -191,7 +263,8 @@ class WandbLogger(BaseLogger):
                 print(f"Successfully cleaned wandb artifacts cache")
         except Exception as e:
             print(f"Warning: Could not clean wandb artifacts cache: {e}")
-    
+            
     def close(self):
         """Finish the wandb run."""
-        wandb.finish()
+        if wandb.run is not None:
+            wandb.finish()

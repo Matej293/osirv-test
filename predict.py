@@ -6,7 +6,6 @@ import wandb
 from tqdm import tqdm
 from network import modeling
 
-from metrics.tensorboard_logger import TensorboardLogger
 from metrics.wandb_logger import WandbLogger
 from datasets.mhist import get_mhist_dataloader
 from config.config_manager import ConfigManager
@@ -37,10 +36,8 @@ def get_argparser():
                       help="Weight decay for optimizer")
     parser.add_argument("--gpu_id", type=str, default="0",
                         help="GPU ID to use for training/testing")
-    parser.add_argument("--ssa_threshold", type=float,
-                      help="Classification threshold for SSA class")
-    parser.add_argument("--hp_threshold", type=float,
-                      help="Classification threshold for HP class")
+    parser.add_argument("--threshold", type=float,
+                      help="Classification threshold")
     parser.add_argument("--use_wandb", action="store_true",
                       help="Use Weights & Biases for logging")
     parser.add_argument("--wandb_project", type=str, default="mhist-classification",
@@ -78,8 +75,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     model.train()
     epochs = config.get('training.epochs')
     log_interval = config.get('logging.batch_log_interval')
-    ssa_threshold = config.get('training.ssa_threshold')
-    hp_threshold = config.get('training.hp_threshold')
+    threshold = config.get('training.threshold')
     
     for epoch in range(epochs):
         epoch_loss = 0.0
@@ -102,9 +98,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
             # applying thresholds for metrics
             batch_loss = loss.item()
             probs = torch.sigmoid(outputs)
-            predicted = torch.zeros_like(masks)
-            predicted[probs > ssa_threshold] = 1.0
-            predicted[probs < hp_threshold] = 0.0
+            predicted = (probs > threshold).float()
             
             # updating batch metrics
             batch_correct = (predicted == masks).sum().item()
@@ -130,6 +124,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
         logger.log_scalar('Train/EpochLoss', epoch_loss, step=epoch + 1)
         logger.log_scalar('Train/Accuracy', accuracy, step=epoch + 1)
         logger.log_scalar('Train/LearningRate', optimizer.param_groups[0]['lr'], step=epoch + 1)
+        logger.log_scalar('Train/WeightDecay', optimizer.param_groups[0]['weight_decay'], step=epoch + 1)
 
         scheduler.step(accuracy)
         
@@ -200,7 +195,8 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
     total_loss = 0.0
     correct, total = 0, 0
     all_preds, all_targets = [], []
-    
+    threshold = config.get('training.threshold')
+
     with torch.no_grad():
         for images, masks in test_loader:
             images, masks = images.to(device), masks.to(device)
@@ -211,12 +207,8 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
             total_loss += loss.item()
             
             probs = torch.sigmoid(outputs)
-            
-            # applying class-specific thresholds
-            predicted = torch.zeros_like(masks)
-            predicted[probs > config.get('training.ssa_threshold')] = 1.0
-            predicted[probs < config.get('training.hp_threshold')] = 0.0
-            
+            predicted = (probs > threshold).float()
+
             correct += (predicted == masks).sum().item()
             total += masks.numel()
            
@@ -227,10 +219,11 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
     avg_loss = total_loss / len(test_loader)
 
     # logging evaluation metrics
-    f1, iou = logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss, step=step)
-
-    print(f"Evaluation — Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
-    print(f"F1-Score: {f1:.4f}, IoU: {iou:.4f}")
+    metrics = logger.log_evaluation_metrics(all_preds, all_targets, accuracy=accuracy, avg_loss=avg_loss, step=step)
+    
+    print(f"Evaluation — Loss: {metrics['loss']:.4f}, Accuracy: {metrics['accuracy']:.4f}")
+    print(f"Precision: {metrics['precision']:.4f}, Recall: {metrics['recall']:.4f}")
+    print(f"F1-Score: {metrics['f1']:.4f}, IoU: {metrics['iou']:.4f}")
 
     # logging sample images
     if len(test_loader) > 0:
@@ -242,10 +235,7 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
             with torch.no_grad():
                 sample_outputs = model(sample_images)
                 sample_probs = torch.sigmoid(sample_outputs)
-                
-                sample_preds = torch.zeros_like(sample_masks)
-                sample_preds[sample_probs > config.get('training.ssa_threshold')] = 1.0
-                sample_preds[sample_probs < config.get('training.hp_threshold')] = 0.0
+                sample_preds = (sample_probs > threshold).float()
             
             # visualizing the data as images
             visualize_segmentation_results(
@@ -258,8 +248,8 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
             )
         except Exception as e:
             print(f"Warning: Could not visualize segmentation results: {e}")
-
-    return f1, iou
+    
+    return metrics
 
 # Main function
 def main():
@@ -275,23 +265,19 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    if args.use_wandb:
-        wandb_config = {
-            "model": config.get("model"),
-            "data": config.get("data"),
-            "training": config.get("training"),
-            "augmentation": config.get("augmentation"),
-        }
-        
-        logger = WandbLogger(
-            project=args.wandb_project,
-            name=args.wandb_name,
-            config=wandb_config
-        )
-        print("Using Weights & Biases for logging")
-    else:
-        logger = TensorboardLogger(log_dir=config.get('logging.log_dir'))
-        print("Using TensorBoard for logging")
+    wandb_config = {
+        "model": config.get("model"),
+        "data": config.get("data"),
+        "training": config.get("training"),
+        "augmentation": config.get("augmentation"),
+    }
+    
+    logger = WandbLogger(
+        project=args.wandb_project,
+        name=args.wandb_name,
+        config=wandb_config
+    )
+    print("Using Weights & Biases for logging")
 
     # loader setup
     train_loader = get_mhist_dataloader(
@@ -353,8 +339,7 @@ def main():
         print(f"Weight Decay: {config.get('training.weight_decay')}")
         print(f"Epochs: {config.get('training.epochs')}")
         print(f"Batch Size: {config.get('data.batch_size')}")
-        print(f"SSA Threshold: {config.get('training.ssa_threshold')}")
-        print(f"HP Threshold: {config.get('training.hp_threshold')}")
+        print(f"Threshold: {config.get('training.threshold')}")
         print("\nAugmentation parameters:")
         for key, value in config.get('augmentation.train').items():
             print(f"{key}: {value}")

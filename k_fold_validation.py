@@ -12,10 +12,9 @@ from datasets.mhist import get_mhist_dataloader
 from config.config_manager import ConfigManager
 from network import modeling
 from metrics.wandb_logger import WandbLogger
-from metrics.tensorboard_logger import TensorboardLogger
 
 
-def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_wandb=False, 
+def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_wandb=True, 
                             project_name="mhist-k-fold", random_state=42):
     config = ConfigManager(config_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -48,17 +47,12 @@ def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_w
         train_df.to_csv(train_csv_path, index=False)
         val_df.to_csv(val_csv_path, index=False)
         
-        if use_wandb:
-            logger = WandbLogger(
-                project=project_name,
-                name=f"fold-{fold+1}",
-                config=config.config
-            )
-            print(f"Using Weights & Biases for logging")
-        else:
-            log_dir = os.path.join(config.get('logging.log_dir'), f"fold_{fold+1}")
-            logger = TensorboardLogger(log_dir=log_dir)
-            print(f"Using TensorBoard for logging")
+        logger = WandbLogger(
+            project=project_name,
+            name=f"fold-{fold+1}",
+            config=config.config
+        )
+        print(f"Using Weights & Biases for logging")
             
         train_loader = get_mhist_dataloader(
             train_csv_path,
@@ -129,12 +123,8 @@ def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_w
                 outputs = trained_model(images)
                 probs = torch.sigmoid(outputs)
                 
-                ssa_threshold = config.get('training.ssa_threshold')
-                hp_threshold = config.get('training.hp_threshold')
-                
-                predicted = torch.zeros_like(masks)
-                predicted[probs > ssa_threshold] = 1.0
-                predicted[probs < hp_threshold] = 0.0
+                threshold = config.get('training.threshold')
+                predicted = (probs > threshold).float()
                 
                 all_probs.extend(probs.cpu().numpy().flatten())
                 all_preds.extend(predicted.cpu().numpy().flatten())
@@ -155,7 +145,7 @@ def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_w
         results["auc_pr_scores"].append(auc_pr)
         
         print("\nPerforming final evaluation on validation fold...")
-        dice, iou = evaluate_model(
+        metrics = evaluate_model(
             model=trained_model,
             test_loader=val_loader,
             device=device,
@@ -166,8 +156,11 @@ def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_w
         
         fold_results = {
             "fold": fold + 1,
-            "dice": dice,
-            "iou": iou,
+            "dice": metrics['f1'],
+            "iou": metrics['iou'],
+            "precision": metrics['precision'],
+            "recall": metrics['recall'],
+            "accuracy": metrics['accuracy'],
             "ap_score": ap_score,
             "auc_pr": auc_pr
         }
@@ -198,7 +191,7 @@ def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_w
         logger.close()
     
     avg_results = {}
-    for metric in ["dice", "iou", "ap_score", "auc_pr"]:
+    for metric in ["dice", "iou", "precision", "recall", "accuracy", "ap_score", "auc_pr"]:
         avg_results[f"avg_{metric}"] = np.mean([fold[metric] for fold in results["fold_metrics"]])
         avg_results[f"std_{metric}"] = np.std([fold[metric] for fold in results["fold_metrics"]])
     
