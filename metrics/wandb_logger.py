@@ -33,11 +33,12 @@ class WandbLogger(BaseLogger):
         os.makedirs(wandb_dir, exist_ok=True)
         os.environ["WANDB_DIR"] = wandb_dir
         
-        try:
-            wandb.init(project=project, name=name, config=config)
-        except Exception as e:
-            print(f"Failed to initialize wandb: {e}")
-            
+        if not reuse and wandb.run is None:
+            try:
+                wandb.init(project=project, name=name, config=config)
+            except Exception as e:
+                print(f"Failed to initialize wandb: {e}")
+
         self._define_metric_groups()
             
     def _define_metric_groups(self):
