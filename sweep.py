@@ -124,7 +124,8 @@ def sweep_train(sweep_config=None):
         logger = WandbLogger(
             project="mhist-classification",
             name=f"sweep-run-{wandb.run.id}",
-            config=config_manager.config
+            config=config_manager.config,
+            reuse=True
         )
         
         train_model(

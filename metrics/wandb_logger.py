@@ -10,7 +10,7 @@ from sklearn.metrics import precision_score, recall_score, f1_score, fbeta_score
 from metrics.base_logger import BaseLogger
 
 class WandbLogger(BaseLogger):
-    def __init__(self, project=None, name=None, config=None):
+    def __init__(self, project=None, name=None, config=None, reuse=False):
         super().__init__()
         self.project = project
         self.name = name
@@ -26,10 +26,11 @@ class WandbLogger(BaseLogger):
         self.train_epoch_step = 1
         self.eval_step = 1
         
-        try:
-            wandb.init(project=project, name=name, config=config)
-        except Exception as e:
-            print(f"Failed to initialize wandb: {e}")
+        if not reuse and wandb.run is None:
+            try:
+                wandb.init(project=project, name=name, config=config)
+            except Exception as e:
+                print(f"Failed to initialize wandb: {e}")
         
         self._define_metric_groups()
     
