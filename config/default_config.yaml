@@ -13,7 +13,7 @@ model:
 data:
   csv_path: "./data/mhist_annotations.csv"
   img_dir: "./data/images"
-  batch_size: 128
+  batch_size: 64
   ssa_count: 990
   hp_count: 2162
 
