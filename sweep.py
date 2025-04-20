@@ -168,7 +168,7 @@ if __name__ == "__main__":
     sweep_id = wandb.sweep(sweep_config, project="mhist-classification-2")
     print(f"Sweep initialized with ID: {sweep_id}")
     
-    wandb.agent(sweep_id, function=sweep_train, count=200)
+    wandb.agent(sweep_id, function=sweep_train, count=50)
 
     cleanup_wandb_directories()
     print("Sweep completed. All runs cleaned up.")
