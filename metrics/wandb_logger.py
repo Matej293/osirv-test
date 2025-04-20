@@ -131,42 +131,18 @@ class WandbLogger(BaseLogger):
             self.log_scalar("Eval/Precision", precision, step)
             self.log_scalar("Eval/F1-Score", f1, step)
             self.log_scalar("Eval/F2-Score", f2, step)
-            
-            # class-specific metrics
-            ssa_indices = np.where(np.array(targets_np) == 1)[0]
-            hp_indices = np.where(np.array(targets_np) == 0)[0]
-            
-            # SSA
-            ssa_pred = np.array(preds_np)[ssa_indices]
-            ssa_true = np.array(targets_np)[ssa_indices]
-            ssa_recall = np.sum(ssa_pred == 1) / len(ssa_indices) if len(ssa_indices) > 0 else 0
-            
-            # HP
-            hp_pred = np.array(preds_np)[hp_indices]
-            hp_true = np.array(targets_np)[hp_indices]
-            hp_recall = np.sum(hp_pred == 0) / len(hp_indices) if len(hp_indices) > 0 else 0
-            
-            # logging class-specific recall metrics
             self.log_scalar("Eval/Recall", recall, step)
-            self.log_scalar("Eval/Recall_SSA", ssa_recall, step)
-            self.log_scalar("Eval/Recall_HP", hp_recall, step)
         except Exception as e:
             print(f"Error calculating metrics: {e}")
     
     def log_evaluation(self, all_preds, all_targets, accuracy, avg_loss, step=None):
         """Log full evaluation results."""
-        dice = self.calculate_dice_coefficient(all_preds, all_targets)
+        f1 = self.calculate_f1_coefficient(all_preds, all_targets)
         iou = self.calculate_iou(all_preds, all_targets)
-        class_metrics = self.calculate_per_class_dice_iou(all_preds, all_targets)
         
         self.log_scalar("Eval/Accuracy", accuracy, step)
         self.log_scalar("Eval/Loss", avg_loss, step)
-        self.log_scalar("Eval/Dice", dice, step)
         self.log_scalar("Eval/IoU", iou, step)
-        self.log_scalar("Eval/Dice_HP", class_metrics['dice_hp'], step)
-        self.log_scalar("Eval/Dice_SSA", class_metrics['dice_ssa'], step)
-        self.log_scalar("Eval/IoU_HP", class_metrics['iou_hp'], step)
-        self.log_scalar("Eval/IoU_SSA", class_metrics['iou_ssa'], step)
         
         self.log_metrics(all_preds, all_targets, step)
         
@@ -176,7 +152,7 @@ class WandbLogger(BaseLogger):
             step=step
         )
         
-        return dice, iou
+        return f1, iou
     
     def log_model(self, model_path, name=None, metadata=None):
         """Log model as a wandb artifact and clean up after uploading."""

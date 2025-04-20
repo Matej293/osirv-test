@@ -164,16 +164,10 @@ def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_w
             step=config.get('training.epochs')
         )
         
-        class_metrics = logger.calculate_per_class_dice_iou(all_preds, all_targets)
-        
         fold_results = {
             "fold": fold + 1,
             "dice": dice,
             "iou": iou,
-            "dice_hp": class_metrics['dice_hp'],
-            "dice_ssa": class_metrics['dice_ssa'],
-            "iou_hp": class_metrics['iou_hp'],
-            "iou_ssa": class_metrics['iou_ssa'],
             "ap_score": ap_score,
             "auc_pr": auc_pr
         }
@@ -204,7 +198,7 @@ def k_fold_cross_validation(config_path="config/default_config.yaml", k=5, use_w
         logger.close()
     
     avg_results = {}
-    for metric in ["dice", "iou", "dice_hp", "dice_ssa", "iou_hp", "iou_ssa", "ap_score", "auc_pr"]:
+    for metric in ["dice", "iou", "ap_score", "auc_pr"]:
         avg_results[f"avg_{metric}"] = np.mean([fold[metric] for fold in results["fold_metrics"]])
         avg_results[f"std_{metric}"] = np.std([fold[metric] for fold in results["fold_metrics"]])
     

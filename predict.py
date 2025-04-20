@@ -227,13 +227,10 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
     avg_loss = total_loss / len(test_loader)
 
     # logging evaluation metrics
-    dice, iou = logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss, step=step)
-    class_metrics = logger.calculate_per_class_dice_iou(all_preds, all_targets)
+    f1, iou = logger.log_evaluation(all_preds, all_targets, accuracy, avg_loss, step=step)
 
     print(f"Evaluation — Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
-    print(f"Dice Coefficient: {dice:.4f}, IoU: {iou:.4f}")
-    print(f"HP - Dice: {class_metrics['dice_hp']:.4f}, IoU: {class_metrics['iou_hp']:.4f}")
-    print(f"SSA - Dice: {class_metrics['dice_ssa']:.4f}, IoU: {class_metrics['iou_ssa']:.4f}")
+    print(f"F1-Score: {f1:.4f}, IoU: {iou:.4f}")
 
     # logging sample images
     if len(test_loader) > 0:
@@ -262,7 +259,7 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
         except Exception as e:
             print(f"Warning: Could not visualize segmentation results: {e}")
 
-    return dice, iou
+    return f1, iou
 
 # Main function
 def main():
@@ -289,8 +286,7 @@ def main():
         logger = WandbLogger(
             project=args.wandb_project,
             name=args.wandb_name,
-            config=wandb_config,
-            init_timeout=args.init_timeout
+            config=wandb_config
         )
         print("Using Weights & Biases for logging")
     else:
@@ -321,13 +317,6 @@ def main():
         pretrained_backbone=config.get('model.pretrained_backbone')
     )
 
-    model.classifier = modeling.DeepLabHeadV3Plus(
-        in_channels=2048,
-        low_level_channels=256, 
-        num_classes=config.get('model.num_classes'),
-        aspp_dilate=config.get('model.aspp_dilate')
-    )
-
     # if train/eval mode is not provided, run both train and eval
     run_train = args.mode is None or args.mode == "train"
     run_eval = args.mode is None or args.mode == "eval"
@@ -350,7 +339,14 @@ def main():
                     print(f"Warning: Invalid checkpoint format in {model_path}")
             except Exception as e:
                 print(f"Error loading model: {e}")
-        
+            
+        model.classifier = modeling.DeepLabHeadV3Plus(
+            in_channels=2048,
+            low_level_channels=256, 
+            num_classes=config.get('model.num_classes'),
+            aspp_dilate=config.get('model.aspp_dilate')
+        )
+
         # print the hyperparameters
         print("\nTraining with hyperparameters:")
         print(f"Learning Rate: {config.get('training.learning_rate')}")
@@ -375,7 +371,7 @@ def main():
         
         if run_eval and args.mode is None:
             print("\n--- Running evaluation after training ---\n")
-            evaluate_model(trained_model, test_loader, device, config, logger, epoch=config.get('training.epochs'))
+            evaluate_model(trained_model, test_loader, device, config, logger, step=config.get('training.epochs'))
             # don't run eval again
             run_eval = False
 

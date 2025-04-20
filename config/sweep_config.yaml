@@ -1,6 +1,6 @@
 method: bayes
 metric:
-  name: Eval/Recall_SSA
+  name: Eval/Accuracy
   goal: maximize
 parameters:
   training.learning_rate:
