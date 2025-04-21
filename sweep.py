@@ -119,7 +119,7 @@ def sweep_train(sweep_config=None):
             print(f"{key}: {value}")
         
         logger = WandbLogger(
-            project="mhist-classification-2",
+            project="mhist-classification-3",
             name=f"sweep-run-{wandb.run.id}",
             config=config_manager.config,
             reuse=True
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     with open("config/sweep_config.yaml", "r") as file:
         sweep_config = yaml.safe_load(file)
     
-    sweep_id = wandb.sweep(sweep_config, project="mhist-classification-2")
+    sweep_id = wandb.sweep(sweep_config, project="mhist-classification-3")
     print(f"Sweep initialized with ID: {sweep_id}")
     
     wandb.agent(sweep_id, function=sweep_train, count=50)

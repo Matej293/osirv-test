@@ -55,10 +55,10 @@ def get_mhist_dataloader(csv_file, img_dir, batch_size=16, partition="train", au
             transforms.RandomVerticalFlip(p=augmentation_config.get('vertical_flip_prob', 0.5)),
             transforms.RandomRotation(degrees=augmentation_config.get('rotation_degrees', 30)),
             transforms.ColorJitter(
-                brightness=augmentation_config.get('brightness', 0.3),
-                contrast=augmentation_config.get('contrast', 0.3),
-                saturation=augmentation_config.get('saturation', 0.3),
-                hue=augmentation_config.get('hue', 0.05)
+                brightness=augmentation_config.get('brightness', 1.0),
+                contrast=augmentation_config.get('contrast', 1.0),
+                saturation=augmentation_config.get('saturation', 1.0),
+                hue=augmentation_config.get('hue', 0.0)
             ),
             transforms.RandomAffine(
                 degrees=0, 

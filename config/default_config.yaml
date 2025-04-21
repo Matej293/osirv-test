@@ -35,13 +35,13 @@ augmentation:
   train:
     resize: [256, 256]
     crop: [224, 224]
-    horizontal_flip_prob: 0.6
-    vertical_flip_prob: 0.6
-    rotation_degrees: 15
+    horizontal_flip_prob: 0.5
+    vertical_flip_prob: 0.5
+    rotation_degrees: 30
     brightness: 0.4
     contrast: 0.2
-    saturation: 0.1
-    hue: 0.05
+    saturation: 1.0
+    hue: 0.0
     translate: [0.1, 0.1]
   test:
     resize: [224, 224]
