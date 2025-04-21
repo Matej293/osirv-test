@@ -20,8 +20,8 @@ data:
 # Training parameters
 training:
   epochs: 15
-  learning_rate: 0.00007427
-  weight_decay: 0.00001661
+  learning_rate: 0.00001572
+  weight_decay: 0.000010
   threshold: 0.5
   scheduler:
     mode: "max"
@@ -38,8 +38,8 @@ augmentation:
     horizontal_flip_prob: 0.5
     vertical_flip_prob: 0.5
     rotation_degrees: 30
-    brightness: 0.4
-    contrast: 0.2
+    brightness: 1.5
+    contrast: 1.5
     saturation: 1.0
     hue: 0.0
     translate: [0.1, 0.1]
