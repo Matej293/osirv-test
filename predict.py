@@ -1,5 +1,6 @@
 import os
 import argparse
+import tempfile
 import torch
 import torch.nn as nn
 import wandb
@@ -140,7 +141,8 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     if save_path:
         if is_sweep_run:
             # for sweep runs, save model to a temp path to log as artifact and not locally
-            temp_path = f"/tmp/model_{wandb.run.id}.pth"
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, f"model_temp_{wandb.run.id}.pth")
             if distributed:
                 torch.save({'model_state': model.module.state_dict()}, temp_path)
             else:
