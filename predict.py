@@ -41,7 +41,7 @@ def get_argparser():
                       help="Classification threshold")
     parser.add_argument("--use_wandb", action="store_true",
                       help="Use Weights & Biases for logging")
-    parser.add_argument("--wandb_project", type=str, default="mhist-classification-3",
+    parser.add_argument("--wandb_project", type=str, default="mhist-classification-4",
                       help="WandB project name")
     parser.add_argument("--wandb_name", type=str, default=None,
                       help="WandB run name")

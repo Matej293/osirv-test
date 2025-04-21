@@ -158,7 +158,7 @@ def distributed_sweep_train(rank, world_size, sweep_config=None, sweep_id=None):
                 print(f"{key}: {value}")
             
             logger = WandbLogger(
-                project="mhist-classification-3",
+                project="mhist-classification-4",
                 name=f"sweep-run-{wandb.run.id}",
                 config=config_manager.config
             )
@@ -197,7 +197,7 @@ def run_sweep():
     with open("config/sweep_config.yaml", "r") as file:
         sweep_config = yaml.safe_load(file)
     
-    sweep_id = wandb.sweep(sweep_config, project="mhist-classification-3")
+    sweep_id = wandb.sweep(sweep_config, project="mhist-classification-4")
     print(f"Sweep initialized with ID: {sweep_id}")
 
     world_size = torch.cuda.device_count()
@@ -212,14 +212,14 @@ def run_sweep():
                 join=True
             )
         
-        wandb.agent(sweep_id, function=distributed_agent, count=50)
+        wandb.agent(sweep_id, function=distributed_agent, count=15)
         from sweep import cleanup_wandb_directories
         cleanup_wandb_directories()
         print("Sweep completed. All runs cleaned up.")
     else:
         print("Only one GPU found, using single GPU training")
         from sweep import sweep_train, cleanup_wandb_directories
-        wandb.agent(sweep_id, function=sweep_train, count=50)
+        wandb.agent(sweep_id, function=sweep_train, count=15)
         cleanup_wandb_directories()
         print("Sweep completed. All runs cleaned up.")
         

@@ -20,8 +20,8 @@ data:
 # Training parameters
 training:
   epochs: 15
-  learning_rate: 0.00006456
-  weight_decay: 0.00008995
+  learning_rate: 0.00007427
+  weight_decay: 0.00001661
   threshold: 0.5
   scheduler:
     mode: "max"
