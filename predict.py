@@ -41,7 +41,7 @@ def get_argparser():
                       help="Classification threshold")
     parser.add_argument("--use_wandb", action="store_true",
                       help="Use Weights & Biases for logging")
-    parser.add_argument("--wandb_project", type=str, default="mhist-classification-4",
+    parser.add_argument("--wandb_project", type=str, default="mhist-classification-5",
                       help="WandB project name")
     parser.add_argument("--wandb_name", type=str, default=None,
                       help="WandB run name")
@@ -57,19 +57,17 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     lr = float(config.get('training.learning_rate'))
     weight_decay = float(config.get('training.weight_decay'))
     
-    optimizer = torch.optim.AdamW(
+    optimizer = torch.optim.SGD(
         model.parameters(), 
         lr=lr,
+        momentum=0.9,
         weight_decay=weight_decay
     )
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        mode=config.get('training.scheduler.mode', 'max'),
-        factor=config.get('training.scheduler.factor', 0.2),
-        patience=config.get('training.scheduler.patience', 2),
-        threshold=config.get('training.scheduler.threshold', 0.005),
-        min_lr=config.get('training.scheduler.min_lr', 1e-6)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=config.get('training.epochs'),
+        eta_min=1e-6
     )
     
     # Training loop
@@ -127,7 +125,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
         logger.log_scalar('Train/LearningRate', optimizer.param_groups[0]['lr'], step=epoch + 1)
         logger.log_scalar('Train/WeightDecay', optimizer.param_groups[0]['weight_decay'], step=epoch + 1)
 
-        scheduler.step(accuracy)
+        scheduler.step()
         
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, "
               f"Accuracy: {accuracy:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
