@@ -6,7 +6,6 @@ class ConfigManager:
     def __init__(self, config_path="config/default_config.yaml"):
         self.config_path = config_path
         self.config = self._load_config()
-        self._setup_class_weights()
     
     def _load_config(self):
         if not os.path.exists(self.config_path):
@@ -26,7 +25,6 @@ class ConfigManager:
         path_keys = {
             'data': ['csv_path', 'img_dir'],
             'model': ['pretrained_path', 'saved_path'],
-            'logging': ['log_dir']
         }
         
         for section, keys in path_keys.items():
@@ -35,18 +33,7 @@ class ConfigManager:
                     if key in config[section] and config[section][key].startswith("./"):
                         rel_path = config[section][key][2:]  # removing the ./ prefix
                         config[section][key] = os.path.normpath(os.path.join(base_dir, rel_path))
-    
-    def _setup_class_weights(self):
-        if 'data' in self.config and 'ssa_count' in self.config['data'] and 'hp_count' in self.config['data']:
-            ssa_count = self.config['data']['ssa_count']
-            hp_count = self.config['data']['hp_count']
-            total_count = ssa_count + hp_count
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.class_weights = torch.tensor(
-                [total_count / hp_count, total_count / ssa_count], 
-                device=self.device
-            )
-    
+
     def get(self, key_path, default=None):
         keys = key_path.split('.')
         value = self.config
@@ -83,8 +70,6 @@ class ConfigManager:
         for arg_name, config_path in arg_mapping.items():
             if hasattr(args, arg_name) and getattr(args, arg_name) is not None:
                 self._update_nested(self.config, config_path, getattr(args, arg_name))
-        
-        self._setup_class_weights()
     
     def _update_nested(self, config_dict, key_path, value):
         if value is None:

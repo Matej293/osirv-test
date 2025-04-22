@@ -48,5 +48,4 @@ augmentation:
 
 # Logging configuration
 logging:
-  log_dir: "./runs/mhist_experiment"
   batch_log_interval: 100

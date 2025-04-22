@@ -52,7 +52,7 @@ def get_argparser():
 # Training function
 def train_model(model, train_loader, device, config, logger=None, save_path=None, distributed=False, train_sampler=None):
     """Train the model with the given configuration."""
-    criterion = nn.BCEWithLogitsLoss(pos_weight=config.class_weights[1])
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0]).to(device))
     
     lr = float(config.get('training.learning_rate'))
     weight_decay = float(config.get('training.weight_decay'))
@@ -192,7 +192,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
 # Evaluation function
 def evaluate_model(model, test_loader, device, config, logger, step=None):
     model.eval()
-    criterion = nn.BCEWithLogitsLoss(pos_weight=config.class_weights[1])
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0]).to(device))
     
     total_loss = 0.0
     correct, total = 0, 0
