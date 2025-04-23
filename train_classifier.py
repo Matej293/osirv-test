@@ -16,7 +16,7 @@ def get_args():
     parser.add_argument('--img_dir', type=str, help='Directory with MHIST images', default='./data/images')
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--lr', type=float, default=0.0001)
+    parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--save_path', type=str, default='./models/classifier_resnet50.pth')
     parser.add_argument('--gpu_id', type=str, default="0")
     return parser.parse_args()
@@ -64,9 +64,9 @@ def main():
     )
 
     # === MODEL ===
-    model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+    model = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
     model.fc = nn.Sequential(
-        nn.Dropout(0.3),
+        nn.Dropout(0.5),
         nn.Linear(model.fc.in_features, 1)
     )
     model = model.to(device)
@@ -80,11 +80,18 @@ def main():
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([class_weights_tensor[1]/class_weights_tensor[0]]).to(device))
     
     lr = args.lr
-    weight_decay = 0.001
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    weight_decay = 0.01
+    optimizer = torch.optim.SGD(
+        model.parameters(), 
+        lr=lr,
+        momentum=0.9,
+        weight_decay=weight_decay
+    )
 
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.1, patience=5,
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=args.epochs,
+        eta_min=1e-6
     )
 
     best_val_acc = 0.0
@@ -159,7 +166,7 @@ def main():
             except:
                 print("Couldn't calculate validation metrics")
         
-        scheduler.step(val_acc)
+        scheduler.step()
         
         # Save best model
         if val_acc > best_val_acc:
