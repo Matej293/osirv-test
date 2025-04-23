@@ -31,22 +31,23 @@ def get_args():
     parser.add_argument('--gpu_id', type=str, default="0")
     return parser.parse_args()
 
-def freeze_layers(model, unfreeze_layer=None):
-    """Freeze all layers except final layer and optionally unfreeze specified layers"""
+def freeze_layers(model, unfreeze_layers=None):
+    """Freeze all layers except those specified"""
     for name, param in model.named_parameters():
         param.requires_grad = False
     
     for param in model.fc.parameters():
         param.requires_grad = True
         
-    if unfreeze_layer:
+    if unfreeze_layers is None:
+        unfreeze_layers = []
+    elif isinstance(unfreeze_layers, str):
+        unfreeze_layers = [unfreeze_layers]
+        
+    for layer in unfreeze_layers:
         for name, param in model.named_parameters():
-            if unfreeze_layer in name:
+            if layer in name:
                 param.requires_grad = True
-                
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Trainable parameters: {trainable_params:,} out of {total_params:,} ({trainable_params/total_params:.2%})")
 
 def main():
     args = get_args()
@@ -121,10 +122,14 @@ def main():
     epoch_counter = 0
     
     # === TRAINING LOOP WITH GRADUAL UNFREEZING ===
+    accumulated_layers = []
     for phase_idx, phase in enumerate(unfreezing_schedule):
+        if phase["layers"]:
+            accumulated_layers.append(phase["layers"])
+        
         print(f"\n=== Phase {phase_idx+1}: Unfreezing {phase['layers'] if phase['layers'] else 'None (only FC)'} ===")
         
-        freeze_layers(model, phase["layers"])
+        freeze_layers(model, accumulated_layers)
         
         lr = args.lr / (2 ** phase_idx)
         print(f"Learning rate: {lr}")
@@ -136,7 +141,7 @@ def main():
         )
         
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='max', factor=0.5, patience=3, verbose=True
+            optimizer, mode='max', factor=0.5, patience=3,
         )
         
         for epoch in range(phase["epochs"]):
