@@ -10,6 +10,30 @@ from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
 from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1.0):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, inputs, targets):
+        inputs = torch.sigmoid(inputs)
+        intersection = (inputs * targets).sum()
+        dice = (2. * intersection + self.smooth) / (inputs.sum() + targets.sum() + self.smooth)
+        return 1 - dice
+
+class CombinedLoss(nn.Module):
+    def __init__(self, weight_dice=1.0, weight_bce=1.0, pos_weight=None):
+        super(CombinedLoss, self).__init__()
+        self.weight_dice = weight_dice
+        self.weight_bce = weight_bce
+        self.dice = DiceLoss()
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        
+    def forward(self, inputs, targets):
+        loss_dice = self.dice(inputs, targets)
+        loss_bce = self.bce(inputs, targets)
+        return self.weight_dice * loss_dice + self.weight_bce * loss_bce
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--csv_path', type=str, help='Path to MHIST CSV', default='./data/mhist_annotations.csv')
@@ -17,7 +41,7 @@ def get_args():
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=0.01)
-    parser.add_argument('--save_path', type=str, default='./models/classifier_resnet50.pth')
+    parser.add_argument('--save_path', type=str, default='./models/classifier_resnet34.pth')
     parser.add_argument('--gpu_id', type=str, default="0")
     return parser.parse_args()
 
@@ -34,8 +58,8 @@ def main():
         'horizontal_flip_prob': 0.5,
         'vertical_flip_prob': 0.5,
         'rotation_degrees': 15,
-        'brightness': 1.2,
-        'contrast': 1.5,
+        'brightness': 0.2,
+        'contrast': 0.2,
         'saturation': 0.1,
         'hue': 0.05,
         'translate': (0.1, 0.1)
@@ -71,14 +95,15 @@ def main():
     )
     model = model.to(device)
 
-    # class weighting
-    y_train = [label.item() for _, label in train_loader.dataset]
-    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(y_train), y=y_train)
-    class_weights_tensor = torch.FloatTensor(class_weights).to(device)
+    config = {
+        'data.ssa_count': 990,
+        'data.hp_count': 2162,
+    }
 
     # weighted loss
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([class_weights_tensor[1]/class_weights_tensor[0]]).to(device))
-    
+    class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
+    criterion = CombinedLoss(weight_dice=1.0, weight_bce=1.0, pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device))
+
     lr = args.lr
     weight_decay = 0.01
     optimizer = torch.optim.SGD(
