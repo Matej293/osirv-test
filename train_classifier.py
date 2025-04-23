@@ -7,32 +7,19 @@ import torch.optim as optim
 from torchvision import models
 from datasets.mhist import get_mhist_dataloader
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
-from sklearn.utils.class_weight import compute_class_weight
-import numpy as np
+import torch.nn.functional as F
 
-class DiceLoss(nn.Module):
-    def __init__(self, smooth=1.0):
-        super(DiceLoss, self).__init__()
-        self.smooth = smooth
-
-    def forward(self, inputs, targets):
-        inputs = torch.sigmoid(inputs)
-        intersection = (inputs * targets).sum()
-        dice = (2. * intersection + self.smooth) / (inputs.sum() + targets.sum() + self.smooth)
-        return 1 - dice
-
-class CombinedLoss(nn.Module):
-    def __init__(self, weight_dice=1.0, weight_bce=1.0, pos_weight=None):
-        super(CombinedLoss, self).__init__()
-        self.weight_dice = weight_dice
-        self.weight_bce = weight_bce
-        self.dice = DiceLoss()
-        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
         
     def forward(self, inputs, targets):
-        loss_dice = self.dice(inputs, targets)
-        loss_bce = self.bce(inputs, targets)
-        return self.weight_dice * loss_dice + self.weight_bce * loss_bce
+        BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        pt = torch.exp(-BCE_loss)
+        F_loss = self.alpha * (1-pt)**self.gamma * BCE_loss
+        return F_loss.mean()
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -101,8 +88,7 @@ def main():
     }
 
     # weighted loss
-    class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
-    criterion = CombinedLoss(weight_dice=1.0, weight_bce=1.0, pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device))
+    criterion = FocalLoss(alpha=0.25, gamma=2.0)
 
     lr = args.lr
     weight_decay = 0.01
