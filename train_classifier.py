@@ -7,6 +7,8 @@ import torch.optim as optim
 from torchvision import models
 from datasets.mhist import get_mhist_dataloader
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
+from sklearn.utils.class_weight import compute_class_weight
+import numpy as np
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -32,8 +34,8 @@ def main():
         'horizontal_flip_prob': 0.5,
         'vertical_flip_prob': 0.5,
         'rotation_degrees': 15,
-        'brightness': 0.2,
-        'contrast': 0.2,
+        'brightness': 1.2,
+        'contrast': 1.5,
         'saturation': 0.1,
         'hue': 0.05,
         'translate': (0.1, 0.1)
@@ -63,13 +65,22 @@ def main():
 
     # === MODEL ===
     model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-    model.fc = nn.Linear(model.fc.in_features, 1)
+    model.fc = nn.Sequential(
+        nn.Dropout(0.3),
+        nn.Linear(model.fc.in_features, 1)
+    )
     model = model.to(device)
 
-    criterion = nn.BCEWithLogitsLoss()
+    # class weighting
+    y_train = [label.item() for _, label in train_loader.dataset]
+    class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(y_train), y=y_train)
+    class_weights_tensor = torch.FloatTensor(class_weights).to(device)
+
+    # weighted loss
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([class_weights_tensor[1]/class_weights_tensor[0]]).to(device))
     
     lr = args.lr
-    weight_decay = 0.0001
+    weight_decay = 0.001
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
