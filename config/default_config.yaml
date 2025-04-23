@@ -7,22 +7,24 @@ model:
   output_stride: 16
   num_classes: 1
   pretrained_backbone: true
-  aspp_dilate: [12, 24, 36]
+  aspp_dilate: [6, 12, 18]
 
 # Dataset configuration
 data:
   csv_path: "./data/mhist_annotations.csv"
   img_dir: "./data/images"
+  mask_dir: "./data/pseudo_masks"
+
   batch_size: 32
   ssa_count: 990
   hp_count: 2162
 
 # Training parameters
 training:
-  epochs: 50
+  epochs: 5
   learning_rate: 0.01
   weight_decay: 0.01
-  threshold: 0.35
+  threshold: 0.5
   scheduler:
     mode: "max"
     factor: 0.2
@@ -33,7 +35,7 @@ training:
 # Augmentation settings
 augmentation:
   train:
-    resize: [256, 256]
+    resize: [224, 224]
     crop: [224, 224]
     horizontal_flip_prob: 0.5
     vertical_flip_prob: 0.5

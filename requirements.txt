@@ -1,5 +1,7 @@
+grad-cam
 matplotlib
 numpy
+opencv-python
 pandas
 pillow
 pyyaml

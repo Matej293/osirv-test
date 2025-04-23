@@ -8,7 +8,7 @@ from tqdm import tqdm
 from network import modeling
 
 from metrics.wandb_logger import WandbLogger
-from datasets.mhist import get_mhist_dataloader
+from datasets.mhist_segm import get_mhist_dataloader
 from config.config_manager import ConfigManager
 from utils.visualization import visualize_segmentation_results
 
@@ -52,7 +52,7 @@ def get_argparser():
 # Training function
 def train_model(model, train_loader, device, config, logger=None, save_path=None, distributed=False, train_sampler=None):
     """Train the model with the given configuration."""
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0]).to(device))
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([3.2]).to(device))
     
     lr = float(config.get('training.learning_rate'))
     weight_decay = float(config.get('training.weight_decay'))
@@ -190,7 +190,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
 # Evaluation function
 def evaluate_model(model, test_loader, device, config, logger, step=None):
     model.eval()
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([1.0]).to(device))
+    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([3.2]).to(device))
     
     total_loss = 0.0
     correct, total = 0, 0
@@ -281,17 +281,19 @@ def main():
 
     # loader setup
     train_loader = get_mhist_dataloader(
-        config.get('data.csv_path'), 
-        config.get('data.img_dir'), 
-        config.get('data.batch_size'),
+        csv_file=config.get('data.csv_path'), 
+        img_dir=config.get('data.img_dir'), 
+        mask_dir=config.get('data.mask_dir'),
+        batch_size=config.get('data.batch_size'),
         partition="train",
         augmentation_config=config.get('augmentation.train')
     )
     
     test_loader = get_mhist_dataloader(
-        config.get('data.csv_path'), 
-        config.get('data.img_dir'), 
-        config.get('data.batch_size'),
+        csv_file=config.get('data.csv_path'), 
+        img_dir=config.get('data.img_dir'), 
+        mask_dir=config.get('data.mask_dir'),
+        batch_size=config.get('data.batch_size'),
         partition="test",
         augmentation_config=config.get('augmentation.test')
     )
