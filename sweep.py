@@ -2,7 +2,6 @@ import os
 import wandb
 import torch
 import yaml
-import argparse
 from predict import train_model, evaluate_model
 from datasets.mhist import get_mhist_dataloader
 from config.config_manager import ConfigManager
@@ -11,54 +10,18 @@ from metrics.wandb_logger import WandbLogger
 
 def sweep_train(sweep_config=None):
     with wandb.init(config=sweep_config):
-        wandb_params = wandb.config
-
         config_manager = ConfigManager("config/default_config.yaml")
-        args = argparse.Namespace()
+        wandb_params = wandb.config
         
-        # Override default config with sweep parameters
-        # Map wandb sweep parameters to the format expected by update_from_args
-        if 'training.learning_rate' in wandb_params:
-            args.lr = float(wandb_params['training.learning_rate'])
-        if 'training.weight_decay' in wandb_params:
-            args.weight_decay = float(wandb_params['training.weight_decay'])
-        if 'data.batch_size' in wandb_params:
-            args.batch_size = int(wandb_params['data.batch_size'])
-        if 'training.threshold' in wandb_params:
-            args.threshold = float(wandb_params['training.threshold'])
-
-        # manually set the epochs for sweep runs
-        args.epochs = 15
-        
-        config_manager.update_from_args(args)
-        
-        aug_params = {}
-        aug_param_keys = [
-            'augmentation.train.rotation_degrees',
-            'augmentation.train.brightness',
-            'augmentation.train.contrast',
-            'augmentation.train.saturation',
-            'augmentation.train.horizontal_flip_prob',
-            'augmentation.train.vertical_flip_prob'
-        ]
-        
-        for key in aug_param_keys:
-            if key in wandb_params:
-                param_name = key.split('.')[-1]
-                aug_params[param_name] = wandb_params[key]
-                
-                parts = key.split('.')
-                current = config_manager.config
-                for part in parts[:-1]:
-                    if part not in current:
-                        current[part] = {}
-                    current = current[part]
-                current[parts[-1]] = wandb_params[key]
+        for param_name, param_value in wandb_params.items():
+            if param_value is not None:
+                config_manager._update_nested(config_manager.config, param_name, param_value)
         
         # Device setup
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {device}")
         
+        # dataloader initialization
         train_loader = get_mhist_dataloader(
             config_manager.get('data.csv_path'),
             config_manager.get('data.img_dir'),
@@ -75,6 +38,7 @@ def sweep_train(sweep_config=None):
             augmentation_config=config_manager.get('augmentation.test')
         )
         
+        # model initialization
         model = modeling.deeplabv3plus_resnet101(
             num_classes=config_manager.get('model.num_classes'),
             output_stride=config_manager.get('model.output_stride'),
@@ -88,6 +52,7 @@ def sweep_train(sweep_config=None):
             aspp_dilate=config_manager.get('model.aspp_dilate')
         )
         
+        # loading the pretrained model if available
         model_path = config_manager.get('model.pretrained_path')
         if os.path.exists(model_path):
             try:
@@ -107,7 +72,7 @@ def sweep_train(sweep_config=None):
         
         model.to(device)
         
-        # print the hyperparameters
+        # Print hyperparameters (optional)
         print("\nTraining with hyperparameters:")
         print(f"Learning Rate: {config_manager.get('training.learning_rate')}")
         print(f"Weight Decay: {config_manager.get('training.weight_decay')}")
@@ -118,6 +83,7 @@ def sweep_train(sweep_config=None):
         for key, value in config_manager.get('augmentation.train').items():
             print(f"{key}: {value}")
         
+        # wandb logger initialization
         logger = WandbLogger(
             project="mhist-classification-5",
             name=f"sweep-run-{wandb.run.id}",
@@ -125,6 +91,7 @@ def sweep_train(sweep_config=None):
             reuse=True
         )
         
+        # Train and evaluate
         train_model(
             model=model,
             train_loader=train_loader,
@@ -134,15 +101,13 @@ def sweep_train(sweep_config=None):
             save_path=f"models/sweep_{wandb.run.id}.pth"
         )
 
-        final_epoch = config_manager.get('training.epochs')
-
         evaluate_model(
             model=model,
             test_loader=test_loader,
             device=device,
             config=config_manager,
             logger=logger,
-            step=final_epoch
+            step=config_manager.get('training.epochs')
         )
 
 def cleanup_wandb_directories():

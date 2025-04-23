@@ -1,13 +1,11 @@
 import os
 import argparse
 from tqdm import tqdm
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torchvision import models, transforms
-from torch.utils.data import DataLoader
-from datasets.mhist import MHISTDataset
+from torchvision import models
+from datasets.mhist import get_mhist_dataloader
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -25,40 +23,43 @@ def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
     # === DATASET ===
-    test_transforms = transforms.Compose([
-        transforms.Resize(tuple((224, 224))),
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std),
-    ])
-
-    train_transforms = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.RandomCrop(tuple((224, 224))),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomVerticalFlip(p=0.5),
-        transforms.RandomRotation(degrees=15),
-        transforms.ColorJitter(
-            brightness=1.2,
-            contrast=1.5,
-            saturation=0.1,
-            hue=0.0
-        ),
-        transforms.RandomAffine(
-            degrees=0, 
-            translate=(0.1, 0.1)
-        ),
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std)
-    ])
-
-    train_dataset = MHISTDataset(csv_file=args.csv_path, img_dir=args.img_dir, transform=train_transforms, partition="train")
-    val_dataset = MHISTDataset(csv_file=args.csv_path, img_dir=args.img_dir, transform=test_transforms, partition="test")
-
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size)
+    # Define augmentation configuration
+    train_augmentation_config = {
+        'resize': (256, 256),
+        'crop': (224, 224),
+        'horizontal_flip_prob': 0.5,
+        'vertical_flip_prob': 0.5,
+        'rotation_degrees': 15,
+        'brightness': 1.2,
+        'contrast': 1.5,
+        'saturation': 0.1,
+        'hue': 0.0,
+        'translate': (0.1, 0.1)
+    }
+    
+    test_augmentation_config = {
+        'resize': (224, 224)
+    }
+    
+    # Use the unified dataloader function
+    train_loader = get_mhist_dataloader(
+        csv_file=args.csv_path, 
+        img_dir=args.img_dir, 
+        batch_size=args.batch_size, 
+        partition="train", 
+        augmentation_config=train_augmentation_config,
+        task="classification"
+    )
+    
+    val_loader = get_mhist_dataloader(
+        csv_file=args.csv_path, 
+        img_dir=args.img_dir, 
+        batch_size=args.batch_size, 
+        partition="test", 
+        augmentation_config=test_augmentation_config,
+        task="classification"
+    )
 
     # === MODEL ===
     model = models.resnet50()
@@ -70,8 +71,6 @@ def main():
     lr = 0.00001572
     weight_decay = 0.000010
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-
-    #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
 
     # === TRAINING LOOP ===
     for epoch in range(args.epochs):
@@ -91,8 +90,6 @@ def main():
             _, preds = torch.max(outputs, 1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
-
-        #scheduler.step()
 
         train_acc = correct / total
         print(f"[Epoch {epoch+1}] Loss: {running_loss:.4f}, Train Acc: {train_acc:.4f}")

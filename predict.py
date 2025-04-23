@@ -8,7 +8,7 @@ from tqdm import tqdm
 from network import modeling
 
 from metrics.wandb_logger import WandbLogger
-from datasets.mhist_segm import get_mhist_dataloader
+from datasets.mhist import get_mhist_dataloader
 from config.config_manager import ConfigManager
 from utils.visualization import visualize_segmentation_results
 
@@ -74,7 +74,7 @@ class CombinedLoss(nn.Module):
         return self.weight_dice * loss_dice + self.weight_bce * loss_bce
 
 # Training function
-def train_model(model, train_loader, device, config, logger=None, save_path=None, distributed=False, train_sampler=None):
+def train_model(model, train_loader, device, config, logger=None, save_path=None):
     """Train the model with the given configuration."""
     class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
     criterion = CombinedLoss(weight_dice=1.0, weight_bce=1.0, pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device))
@@ -105,10 +105,6 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
         epoch_loss = 0.0
         correct, total = 0, 0
         
-        # Set epoch for distributed sampler if using distributed training
-        if distributed and train_sampler is not None:
-            train_sampler.set_epoch(epoch)
-
         for batch_idx, (images, masks) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")):
             images, masks = images.to(device), masks.to(device)
             masks = masks.unsqueeze(1).float()
@@ -166,10 +162,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
             # for sweep runs, save model to a temp path to log as artifact and not locally
             temp_dir = tempfile.gettempdir()
             temp_path = os.path.join(temp_dir, f"model_temp_{wandb.run.id}.pth")
-            if distributed:
-                torch.save({'model_state': model.module.state_dict()}, temp_path)
-            else:
-                torch.save({'model_state': model.state_dict()}, temp_path)
+            torch.save({'model_state': model.state_dict()}, temp_path)
 
             if logger and isinstance(logger, WandbLogger):
                 logger.log_model(
@@ -192,10 +185,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
             # for non-sweep runs, save model locally and log it
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-            if distributed:
-                torch.save({'model_state': model.module.state_dict()}, save_path)
-            else:
-                torch.save({'model_state': model.state_dict()}, save_path)
+            torch.save({'model_state': model.state_dict()}, save_path)
             print(f"Model saved to {save_path}")
             
             if logger and isinstance(logger, WandbLogger):
@@ -312,7 +302,8 @@ def main():
         mask_dir=config.get('data.mask_dir'),
         batch_size=config.get('data.batch_size'),
         partition="train",
-        augmentation_config=config.get('augmentation.train')
+        augmentation_config=config.get('augmentation.train'),
+        task="segmentation"
     )
     
     test_loader = get_mhist_dataloader(
@@ -321,7 +312,8 @@ def main():
         mask_dir=config.get('data.mask_dir'),
         batch_size=config.get('data.batch_size'),
         partition="test",
-        augmentation_config=config.get('augmentation.test')
+        augmentation_config=config.get('augmentation.test'),
+        task="segmentation"
     )
 
     # model setup
