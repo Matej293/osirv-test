@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import models
 from datasets.mhist import get_mhist_dataloader
+from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -13,7 +14,7 @@ def get_args():
     parser.add_argument('--img_dir', type=str, help='Directory with MHIST images', default='./data/images')
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--lr', type=float, default=0.0001)
     parser.add_argument('--save_path', type=str, default='./models/classifier_resnet50.pth')
     parser.add_argument('--gpu_id', type=str, default="0")
     return parser.parse_args()
@@ -31,10 +32,10 @@ def main():
         'horizontal_flip_prob': 0.5,
         'vertical_flip_prob': 0.5,
         'rotation_degrees': 15,
-        'brightness': 1.2,
-        'contrast': 1.5,
+        'brightness': 0.2,
+        'contrast': 0.2,
         'saturation': 0.1,
-        'hue': 0.0,
+        'hue': 0.05,
         'translate': (0.1, 0.1)
     }
     
@@ -42,7 +43,6 @@ def main():
         'resize': (224, 224)
     }
     
-    # Use the unified dataloader function
     train_loader = get_mhist_dataloader(
         csv_file=args.csv_path, 
         img_dir=args.img_dir, 
@@ -62,54 +62,107 @@ def main():
     )
 
     # === MODEL ===
-    model = models.resnet50()
-    model.fc = nn.Linear(model.fc.in_features, 2)
+    model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+    model.fc = nn.Linear(model.fc.in_features, 1)
     model = model.to(device)
 
-    criterion = nn.CrossEntropyLoss()
-
-    lr = 0.00001572
-    weight_decay = 0.000010
+    criterion = nn.BCEWithLogitsLoss()
+    
+    lr = args.lr
+    weight_decay = 0.0001
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='max', factor=0.1, patience=5,
+    )
+
+    best_val_acc = 0.0
+    
     # === TRAINING LOOP ===
     for epoch in range(args.epochs):
         model.train()
         running_loss, correct, total = 0.0, 0, 0
+        y_true, y_pred = [], []
 
         for imgs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}"):
             imgs, labels = imgs.to(device), labels.to(device)
+            
+            labels_float = labels.float().unsqueeze(1)
 
             optimizer.zero_grad()
             outputs = model(imgs)
-            loss = criterion(outputs, labels)
+            loss = criterion(outputs, labels_float)
             loss.backward()
+            
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
             optimizer.step()
 
             running_loss += loss.item()
-            _, preds = torch.max(outputs, 1)
-            correct += (preds == labels).sum().item()
+            
+            preds = (torch.sigmoid(outputs) > 0.5).int()
+            correct += (preds == labels_float).sum().item()
             total += labels.size(0)
+            
+            y_true.extend(labels.cpu().numpy())
+            y_pred.extend(preds.cpu().view(-1).numpy())
 
         train_acc = correct / total
         print(f"[Epoch {epoch+1}] Loss: {running_loss:.4f}, Train Acc: {train_acc:.4f}")
 
-        # validation (optional)
+        if epoch % 5 == 0:
+            precision, recall, f1, _ = precision_recall_fscore_support(
+                y_true, y_pred, average='binary', zero_division=0
+            )
+            print(f"Train Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
+
         model.eval()
         correct, total = 0, 0
+        val_y_true, val_y_pred, val_outputs_all = [], [], []
+        
         with torch.no_grad():
             for imgs, labels in val_loader:
                 imgs, labels = imgs.to(device), labels.to(device)
+                labels_float = labels.float().unsqueeze(1)
+                
                 outputs = model(imgs)
-                _, preds = torch.max(outputs, 1)
-                correct += (preds == labels).sum().item()
+                preds = (torch.sigmoid(outputs) > 0.5).int()
+                
+                correct += (preds == labels_float).sum().item()
                 total += labels.size(0)
-        val_acc = correct / total
+                
+                val_y_true.extend(labels.cpu().numpy())
+                val_y_pred.extend(preds.cpu().view(-1).numpy())
+                val_outputs_all.extend(torch.sigmoid(outputs).cpu().view(-1).numpy())
+        
+        val_acc = correct / total if total > 0 else 0
         print(f"Validation Acc: {val_acc:.4f}")
+        
+        if epoch % 5 == 0 and len(set(val_y_true)) > 1:
+            try:
+                val_precision, val_recall, val_f1, _ = precision_recall_fscore_support(
+                    val_y_true, val_y_pred, average='binary', zero_division=0
+                )
+                val_auc = roc_auc_score(val_y_true, val_outputs_all)
+                print(f"Val Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, F1: {val_f1:.4f}, AUC: {val_auc:.4f}")
+            except:
+                print("Couldn't calculate validation metrics")
+        
+        scheduler.step(val_acc)
+        
+        # Save best model
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_acc': val_acc,
+            }, args.save_path)
+            print(f"Saved new best model with validation accuracy: {val_acc:.4f}")
 
-    # === SAVE MODEL ===
-    torch.save(model.state_dict(), args.save_path)
-    print(f"Model saved to {args.save_path}")
+    print(f"Best validation accuracy: {best_val_acc:.4f}")
+    print(f"Final model saved to {args.save_path}")
 
 if __name__ == "__main__":
     main()
