@@ -3,7 +3,6 @@ import argparse
 from tqdm import tqdm
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torchvision import models
 from datasets.mhist import get_mhist_dataloader
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
@@ -27,7 +26,7 @@ def get_args():
     parser.add_argument('--img_dir', type=str, help='Directory with MHIST images', default='./data/images')
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--lr', type=float, default=0.001)  # Lower initial learning rate
+    parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--save_path', type=str, default='./models/classifier_resnet34.pth')
     parser.add_argument('--gpu_id', type=str, default="0")
     return parser.parse_args()
@@ -61,8 +60,8 @@ def main():
         'horizontal_flip_prob': 0.5,
         'vertical_flip_prob': 0.5,
         'rotation_degrees': 30,
-        'brightness': 0.2,
-        'contrast': 0.2,
+        'brightness': 1.2,
+        'contrast': 1.5,
         'saturation': 0.1,
         'hue': 0.05,
         'translate': (0.1, 0.1)
@@ -162,7 +161,7 @@ def main():
 
                 running_loss += loss.item()
                 
-                preds = (torch.sigmoid(outputs) > 0.4).int()
+                preds = (torch.sigmoid(outputs) > 0.35).int()
                 correct += (preds == labels_float).sum().item()
                 total += labels.size(0)
                 
@@ -187,7 +186,7 @@ def main():
                     loss = criterion(outputs, labels_float)
                     val_loss += loss.item()
                     
-                    preds = (torch.sigmoid(outputs) > 0.4).int()
+                    preds = (torch.sigmoid(outputs) > 0.35).int()
                     
                     correct += (preds == labels_float).sum().item()
                     total += labels.size(0)
