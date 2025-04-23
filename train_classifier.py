@@ -103,8 +103,7 @@ def main():
         'data.hp_count': 2162,
     }
 
-    # weighted loss
-    criterion = FocalLoss(alpha=0.25, gamma=2.0)
+    criterion = FocalLoss(alpha=0.75, gamma=1.0)
     
     # === GRADUAL UNFREEZING SCHEDULE ===
     unfreezing_schedule = [
@@ -163,7 +162,7 @@ def main():
 
                 running_loss += loss.item()
                 
-                preds = (torch.sigmoid(outputs) > 0.5).int()
+                preds = (torch.sigmoid(outputs) > 0.4).int()
                 correct += (preds == labels_float).sum().item()
                 total += labels.size(0)
                 
@@ -188,7 +187,7 @@ def main():
                     loss = criterion(outputs, labels_float)
                     val_loss += loss.item()
                     
-                    preds = (torch.sigmoid(outputs) > 0.5).int()
+                    preds = (torch.sigmoid(outputs) > 0.4).int()
                     
                     correct += (preds == labels_float).sum().item()
                     total += labels.size(0)
