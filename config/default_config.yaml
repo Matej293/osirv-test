@@ -21,7 +21,7 @@ data:
 
 # Training parameters
 training:
-  epochs: 5
+  epochs: 25
   learning_rate: 0.01
   weight_decay: 0.01
   threshold: 0.5
