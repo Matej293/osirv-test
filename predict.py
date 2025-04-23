@@ -49,10 +49,35 @@ def get_argparser():
                       help="Timeout for wandb initialization")
     return parser
 
+class DiceLoss(nn.Module):
+    def __init__(self, smooth=1.0):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, inputs, targets):
+        inputs = torch.sigmoid(inputs)
+        intersection = (inputs * targets).sum()
+        dice = (2. * intersection + self.smooth) / (inputs.sum() + targets.sum() + self.smooth)
+        return 1 - dice
+
+class CombinedLoss(nn.Module):
+    def __init__(self, weight_dice=1.0, weight_bce=1.0, pos_weight=None):
+        super(CombinedLoss, self).__init__()
+        self.weight_dice = weight_dice
+        self.weight_bce = weight_bce
+        self.dice = DiceLoss()
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        
+    def forward(self, inputs, targets):
+        loss_dice = self.dice(inputs, targets)
+        loss_bce = self.bce(inputs, targets)
+        return self.weight_dice * loss_dice + self.weight_bce * loss_bce
+
 # Training function
 def train_model(model, train_loader, device, config, logger=None, save_path=None, distributed=False, train_sampler=None):
     """Train the model with the given configuration."""
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([3.2]).to(device))
+    class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
+    criterion = CombinedLoss(weight_dice=1.0, weight_bce=1.0, pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device))
     
     lr = float(config.get('training.learning_rate'))
     weight_decay = float(config.get('training.weight_decay'))
@@ -190,7 +215,8 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
 # Evaluation function
 def evaluate_model(model, test_loader, device, config, logger, step=None):
     model.eval()
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([3.2]).to(device))
+    class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
+    criterion = CombinedLoss(weight_dice=1.0, weight_bce=1.0, pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device))
     
     total_loss = 0.0
     correct, total = 0, 0
