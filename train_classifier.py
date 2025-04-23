@@ -49,6 +49,10 @@ def freeze_layers(model, unfreeze_layers=None):
             if layer in name:
                 param.requires_grad = True
 
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Trainable parameters: {trainable_params:,} out of {total_params:,} ({trainable_params/total_params:.2%})")
+
 def main():
     args = get_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
