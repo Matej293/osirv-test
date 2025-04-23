@@ -27,10 +27,27 @@ def get_args():
     parser.add_argument('--img_dir', type=str, help='Directory with MHIST images', default='./data/images')
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--lr', type=float, default=0.001)  # Lower initial learning rate
     parser.add_argument('--save_path', type=str, default='./models/classifier_resnet34.pth')
     parser.add_argument('--gpu_id', type=str, default="0")
     return parser.parse_args()
+
+def freeze_layers(model, unfreeze_layer=None):
+    """Freeze all layers except final layer and optionally unfreeze specified layers"""
+    for name, param in model.named_parameters():
+        param.requires_grad = False
+    
+    for param in model.fc.parameters():
+        param.requires_grad = True
+        
+    if unfreeze_layer:
+        for name, param in model.named_parameters():
+            if unfreeze_layer in name:
+                param.requires_grad = True
+                
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Trainable parameters: {trainable_params:,} out of {total_params:,} ({trainable_params/total_params:.2%})")
 
 def main():
     args = get_args()
@@ -38,13 +55,12 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # === DATASET ===
-    # Define augmentation configuration
     train_augmentation_config = {
         'resize': (256, 256),
         'crop': (224, 224),
         'horizontal_flip_prob': 0.5,
         'vertical_flip_prob': 0.5,
-        'rotation_degrees': 15,
+        'rotation_degrees': 30,
         'brightness': 0.2,
         'contrast': 0.2,
         'saturation': 0.1,
@@ -89,106 +105,133 @@ def main():
 
     # weighted loss
     criterion = FocalLoss(alpha=0.25, gamma=2.0)
-
-    lr = args.lr
-    weight_decay = 0.01
-    optimizer = torch.optim.SGD(
-        model.parameters(), 
-        lr=lr,
-        momentum=0.9,
-        weight_decay=weight_decay
-    )
-
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=args.epochs,
-        eta_min=1e-6
-    )
-
-    best_val_acc = 0.0
     
-    # === TRAINING LOOP ===
-    for epoch in range(args.epochs):
-        model.train()
-        running_loss, correct, total = 0.0, 0, 0
-        y_true, y_pred = [], []
-
-        for imgs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}"):
-            imgs, labels = imgs.to(device), labels.to(device)
-            
-            labels_float = labels.float().unsqueeze(1)
-
-            optimizer.zero_grad()
-            outputs = model(imgs)
-            loss = criterion(outputs, labels_float)
-            loss.backward()
-            
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
-            optimizer.step()
-
-            running_loss += loss.item()
-            
-            preds = (torch.sigmoid(outputs) > 0.5).int()
-            correct += (preds == labels_float).sum().item()
-            total += labels.size(0)
-            
-            y_true.extend(labels.cpu().numpy())
-            y_pred.extend(preds.cpu().view(-1).numpy())
-
-        train_acc = correct / total
-        print(f"[Epoch {epoch+1}] Loss: {running_loss:.4f}, Train Acc: {train_acc:.4f}")
-
-        if epoch % 5 == 0:
-            precision, recall, f1, _ = precision_recall_fscore_support(
-                y_true, y_pred, average='binary', zero_division=0
-            )
-            print(f"Train Precision: {precision:.4f}, Recall: {recall:.4f}, F1: {f1:.4f}")
-
-        model.eval()
-        correct, total = 0, 0
-        val_y_true, val_y_pred, val_outputs_all = [], [], []
+    # === GRADUAL UNFREEZING SCHEDULE ===
+    unfreezing_schedule = [
+        {"epochs": 5, "layers": None},
+        {"epochs": 5, "layers": "layer4"},
+        {"epochs": 5, "layers": "layer3"},
+        {"epochs": 5, "layers": "layer2"},
+        {"epochs": 10, "layers": "layer1"}
+    ]
+    
+    # For early stopping
+    patience = 10
+    best_val_acc = 0.0
+    early_stop_counter = 0
+    
+    epoch_counter = 0
+    
+    # === TRAINING LOOP WITH GRADUAL UNFREEZING ===
+    for phase_idx, phase in enumerate(unfreezing_schedule):
+        print(f"\n=== Phase {phase_idx+1}: Unfreezing {phase['layers'] if phase['layers'] else 'None (only FC)'} ===")
         
-        with torch.no_grad():
-            for imgs, labels in val_loader:
+        freeze_layers(model, phase["layers"])
+        
+        lr = args.lr / (2 ** phase_idx)
+        print(f"Learning rate: {lr}")
+        
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=lr,
+            weight_decay=0.01
+        )
+        
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=3, verbose=True
+        )
+        
+        for epoch in range(phase["epochs"]):
+            epoch_counter += 1
+            model.train()
+            running_loss, correct, total = 0.0, 0, 0
+            y_true, y_pred = [], []
+
+            for imgs, labels in tqdm(train_loader, desc=f"Epoch {epoch_counter}/{sum(p['epochs'] for p in unfreezing_schedule)}"):
                 imgs, labels = imgs.to(device), labels.to(device)
+                
                 labels_float = labels.float().unsqueeze(1)
-                
+
+                optimizer.zero_grad()
                 outputs = model(imgs)
-                preds = (torch.sigmoid(outputs) > 0.5).int()
+                loss = criterion(outputs, labels_float)
+                loss.backward()
                 
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
+                optimizer.step()
+
+                running_loss += loss.item()
+                
+                preds = (torch.sigmoid(outputs) > 0.5).int()
                 correct += (preds == labels_float).sum().item()
                 total += labels.size(0)
                 
-                val_y_true.extend(labels.cpu().numpy())
-                val_y_pred.extend(preds.cpu().view(-1).numpy())
-                val_outputs_all.extend(torch.sigmoid(outputs).cpu().view(-1).numpy())
+                y_true.extend(labels.cpu().numpy())
+                y_pred.extend(preds.cpu().view(-1).numpy())
+
+            train_acc = correct / total
+            print(f"[Epoch {epoch_counter}] Loss: {running_loss:.4f}, Train Acc: {train_acc:.4f}")
+
+            # Validation
+            model.eval()
+            correct, total = 0, 0
+            val_y_true, val_y_pred, val_outputs_all = [], [], []
+            val_loss = 0.0
+            
+            with torch.no_grad():
+                for imgs, labels in val_loader:
+                    imgs, labels = imgs.to(device), labels.to(device)
+                    labels_float = labels.float().unsqueeze(1)
+                    
+                    outputs = model(imgs)
+                    loss = criterion(outputs, labels_float)
+                    val_loss += loss.item()
+                    
+                    preds = (torch.sigmoid(outputs) > 0.5).int()
+                    
+                    correct += (preds == labels_float).sum().item()
+                    total += labels.size(0)
+                    
+                    val_y_true.extend(labels.cpu().numpy())
+                    val_y_pred.extend(preds.cpu().view(-1).numpy())
+                    val_outputs_all.extend(torch.sigmoid(outputs).cpu().view(-1).numpy())
+            
+            val_acc = correct / total if total > 0 else 0
+            print(f"Validation Acc: {val_acc:.4f}, Loss: {val_loss:.4f}")
+            
+            # calculate additional metrics periodically
+            if len(set(val_y_true)) > 1:
+                try:
+                    val_precision, val_recall, val_f1, _ = precision_recall_fscore_support(
+                        val_y_true, val_y_pred, average='binary', zero_division=0
+                    )
+                    val_auc = roc_auc_score(val_y_true, val_outputs_all)
+                    print(f"Val Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, F1: {val_f1:.4f}, AUC: {val_auc:.4f}")
+                except:
+                    print("Couldn't calculate validation metrics")
+            
+            scheduler.step(val_acc)
+            
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                early_stop_counter = 0
+                torch.save({
+                    'epoch': epoch_counter,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'val_acc': val_acc,
+                }, args.save_path)
+                print(f"Saved new best model with validation accuracy: {val_acc:.4f}")
+            else:
+                early_stop_counter += 1
+            
+            if early_stop_counter >= patience:
+                print(f"Early stopping triggered after {epoch_counter} epochs")
+                break
         
-        val_acc = correct / total if total > 0 else 0
-        print(f"Validation Acc: {val_acc:.4f}")
-        
-        if epoch % 5 == 0 and len(set(val_y_true)) > 1:
-            try:
-                val_precision, val_recall, val_f1, _ = precision_recall_fscore_support(
-                    val_y_true, val_y_pred, average='binary', zero_division=0
-                )
-                val_auc = roc_auc_score(val_y_true, val_outputs_all)
-                print(f"Val Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, F1: {val_f1:.4f}, AUC: {val_auc:.4f}")
-            except:
-                print("Couldn't calculate validation metrics")
-        
-        scheduler.step()
-        
-        # Save best model
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_acc': val_acc,
-            }, args.save_path)
-            print(f"Saved new best model with validation accuracy: {val_acc:.4f}")
+        if early_stop_counter >= patience:
+            break
 
     print(f"Best validation accuracy: {best_val_acc:.4f}")
     print(f"Final model saved to {args.save_path}")
