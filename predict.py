@@ -82,7 +82,7 @@ class IoULoss(nn.Module):
         return 1 - IoU
 
 class CombinedLoss(nn.Module):
-    def __init__(self, weight_dice=0.5, weight_bce=0.3, weight_iou=0.2, pos_weight=None):
+    def __init__(self, weight_dice=0.4, weight_bce=0.2, weight_iou=0.4, pos_weight=None):
         super(CombinedLoss, self).__init__()
         self.weight_dice = weight_dice
         self.weight_bce = weight_bce
