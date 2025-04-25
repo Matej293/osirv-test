@@ -76,7 +76,7 @@ class CombinedLoss(nn.Module):
 # Training function
 def train_model(model, train_loader, device, config, logger=None, save_path=None):
     """Train the model with the given configuration."""
-    class_weight = config.get('data.ssa_count') + config.get('data.hp_count') / config.get('data.ssa_count')
+    class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
     criterion = CombinedLoss(weight_dice=1.0, weight_bce=1.0, pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device))
  
     lr = float(config.get('training.learning_rate'))
