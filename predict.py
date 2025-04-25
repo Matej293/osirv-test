@@ -60,60 +60,34 @@ class DiceLoss(nn.Module):
         dice = (2. * intersection + self.smooth) / (inputs.sum() + targets.sum() + self.smooth)
         return 1 - dice
 
-class IoULoss(nn.Module):
-    def __init__(self, smooth=1.0):
-        super(IoULoss, self).__init__()
-        self.smooth = smooth
-        
-    def forward(self, inputs, targets):
-        inputs = torch.sigmoid(inputs)
-        
-        # Flatten
-        inputs = inputs.view(-1)
-        targets = targets.view(-1)
-        
-        # Calculate IoU
-        intersection = (inputs * targets).sum()
-        total = (inputs + targets).sum()
-        union = total - intersection
-        
-        IoU = (intersection + self.smooth) / (union + self.smooth)
-        
-        return 1 - IoU
-
 class CombinedLoss(nn.Module):
-    def __init__(self, weight_dice=0.4, weight_bce=0.2, weight_iou=0.4, pos_weight=None):
+    def __init__(self, weight_dice=1.0, weight_bce=1.0, pos_weight=None):
         super(CombinedLoss, self).__init__()
         self.weight_dice = weight_dice
         self.weight_bce = weight_bce
-        self.weight_iou = weight_iou
-        self.dice = DiceLoss(smooth=1.0)
+        self.dice = DiceLoss()
         self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        self.iou = IoULoss(smooth=1.0)
         
     def forward(self, inputs, targets):
         loss_dice = self.dice(inputs, targets)
         loss_bce = self.bce(inputs, targets)
-        loss_iou = self.iou(inputs, targets)
-        return self.weight_dice * loss_dice + self.weight_bce * loss_bce + self.weight_iou * loss_iou
+        return self.weight_dice * loss_dice + self.weight_bce * loss_bce
 
 # Training function
 def train_model(model, train_loader, device, config, logger=None, save_path=None):
     """Train the model with the given configuration."""
-    class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
-    criterion = CombinedLoss(
-        weight_dice=0.5,
-        weight_bce=0.3,
-        weight_iou=0.2,
-        pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device)
-    )    
+    class_weight = config.get('data.ssa_count') / config.get('data.ssa_count')
+    criterion = CombinedLoss(weight_dice=1.0, weight_bce=1.0, pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device))
+ 
     lr = float(config.get('training.learning_rate'))
     weight_decay = float(config.get('training.weight_decay'))
     
-    optimizer = torch.optim.AdamW(
-        model.parameters(), 
+    optimizer = torch.optim.SGD(
+        model.parameters(),
         lr=lr,
-        weight_decay=weight_decay
+        momentum=0.9,
+        weight_decay=weight_decay,
+        nesterov=True
     )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
