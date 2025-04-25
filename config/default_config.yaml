@@ -45,3 +45,10 @@ augmentation:
 # Logging configuration
 logging:
   batch_log_interval: 100
+
+# Postprocessing settings
+postprocessing:
+  enabled: true
+  min_size: 50
+  closing_radius: 3
+  fill_holes: true

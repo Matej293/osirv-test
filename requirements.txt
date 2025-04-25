@@ -6,6 +6,7 @@ pandas
 pillow
 pyyaml
 scikit-learn
+scikit-image
 seaborn
 torch
 torchvision
