@@ -87,7 +87,6 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
         lr=lr,
         momentum=0.9,
         weight_decay=weight_decay,
-        nesterov=True
     )
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
