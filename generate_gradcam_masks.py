@@ -5,42 +5,33 @@ import numpy as np
 from tqdm import tqdm
 from datasets.mhist import get_mhist_dataloader
 from pytorch_grad_cam import GradCAM
+from torchvision import models
+from torch import nn
 
 def main():
     # === Paths & settings ===
-    model_path = './models/model_qdpxjvvw.pth'
+    model_path = './models/classifier_resnet34.pth'
     image_dir = './data/images'
     csv_path = './data/mhist_annotations.csv'
     output_dir = './data/pseudo_masks'
     os.makedirs(output_dir, exist_ok=True)
-    batch_size = 1  # Grad-CAM is usually per-image
+    batch_size = 1
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # === Load model ===
-    from network import modeling
-
-    model = modeling.deeplabv3plus_resnet101(
-        num_classes=1,
-        output_stride=16,
-        pretrained_backbone=True,
+    model = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
+    model.fc = nn.Sequential(
+        nn.Dropout(0.5),
+        nn.Linear(model.fc.in_features, 1)
     )
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-    if 'model_state' in checkpoint:
-        state_dict = checkpoint['model_state']
-        state_dict.pop('classifier.classifier.3.weight', None)
-        state_dict.pop('classifier.classifier.3.bias', None)
+    if 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
         model.load_state_dict(state_dict, strict=False)
         print(f"Loaded model from {model_path}")
     else:
         print(f"Warning: Invalid checkpoint format in {model_path}")
-
-    model.classifier = modeling.DeepLabHeadV3Plus(
-        in_channels=2048,
-        low_level_channels=256,
-        num_classes=1,
-        aspp_dilate=[6, 12, 18]
-    )
 
     model.to(device).eval()
 
@@ -57,7 +48,7 @@ def main():
     dataset = dataloader.dataset
 
     # === Grad-CAM setup ===
-    target_layers = [model.backbone.layer4[-1]]  # using deepest conv layer for Grad-CAM
+    target_layers = [model.layer4[-1]]  # using deepest conv layer for Grad-CAM
     cam = GradCAM(model=model, target_layers=target_layers)
 
     # === Mask saving function ===
