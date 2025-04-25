@@ -82,17 +82,19 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     lr = float(config.get('training.learning_rate'))
     weight_decay = float(config.get('training.weight_decay'))
     
-    optimizer = torch.optim.SGD(
+    optimizer = torch.optim.Adam(
         model.parameters(),
         lr=lr,
-        momentum=0.9,
-        weight_decay=weight_decay,
+        weight_decay=weight_decay
     )
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        T_max=config.get('training.epochs'),
-        eta_min=1e-6
+        max_lr=lr * 2,
+        total_steps=config.get('training.epochs') * len(train_loader),
+        pct_start=0.3,
+        div_factor=25,
+        final_div_factor=1000
     )
     
     # Training loop
@@ -114,6 +116,7 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
             loss = criterion(outputs, masks)
             loss.backward()
             optimizer.step()
+            scheduler.step()
 
             # applying thresholds for metrics
             batch_loss = loss.item()
@@ -145,8 +148,6 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
         logger.log_scalar('Train/Accuracy', accuracy, step=epoch + 1)
         logger.log_scalar('Train/LearningRate', optimizer.param_groups[0]['lr'], step=epoch + 1)
         logger.log_scalar('Train/WeightDecay', optimizer.param_groups[0]['weight_decay'], step=epoch + 1)
-
-        scheduler.step()
         
         print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, "
               f"Accuracy: {accuracy:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
