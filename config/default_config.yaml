@@ -22,9 +22,9 @@ data:
 # Training parameters
 training:
   epochs: 25
-  learning_rate: 0.01
-  weight_decay: 0.01
-  threshold: 0.35
+  learning_rate: 0.001
+  weight_decay: 0.0005
+  threshold: 0.5
 
 # Augmentation settings
 augmentation:

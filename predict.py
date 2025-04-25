@@ -229,7 +229,12 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
 def evaluate_model(model, test_loader, device, config, logger, step=None):
     model.eval()
     class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
-    criterion = CombinedLoss(weight_dice=0.5, weight_bce=0.3, weight_iou=0.2, pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device))
+    criterion = CombinedLoss(
+        weight_dice=0.6, 
+        weight_bce=0.2, 
+        weight_iou=1.0,
+        pos_weight=torch.tensor([class_weight], dtype=torch.float).to(device)
+    )
     
     total_loss = 0.0
     correct, total = 0, 0
@@ -304,7 +309,6 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
                         probabilities=sample_probs,
                         step=step,
                         logger=logger,
-                        title="Raw Predictions"
                     )
                     
                     visualize_segmentation_results(
@@ -314,7 +318,6 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
                         probabilities=sample_probs,
                         step=step,
                         logger=logger,
-                        title="Post-Processed Predictions"
                     )
                 else:
                     visualize_segmentation_results(
