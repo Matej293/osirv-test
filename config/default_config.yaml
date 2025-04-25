@@ -23,8 +23,8 @@ data:
 training:
   epochs: 25
   learning_rate: 0.01
-  weight_decay: 0.01
-  threshold: 0.5
+  weight_decay: 0.03
+  threshold: 0.35
 
 # Augmentation settings
 augmentation:
