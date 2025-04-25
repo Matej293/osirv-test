@@ -10,7 +10,7 @@ from torch import nn
 
 def main():
     # === Paths & settings ===
-    model_path = './models/classifier_resnet34.pth'
+    model_path = './models/classifier_resnet34_trained.pth'
     image_dir = './data/images'
     csv_path = './data/mhist_annotations.csv'
     output_dir = './data/pseudo_masks'
@@ -20,10 +20,6 @@ def main():
 
     # === Load model ===
     model = models.resnet34(weights=models.ResNet34_Weights.DEFAULT)
-    model.fc = nn.Sequential(
-        nn.Dropout(0.5),
-        nn.Linear(model.fc.in_features, 1)
-    )
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     if 'model_state_dict' in checkpoint:

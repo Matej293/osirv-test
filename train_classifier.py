@@ -27,7 +27,7 @@ def get_args():
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--lr', type=float, default=0.001)
-    parser.add_argument('--save_path', type=str, default='./models/classifier_resnet34.pth')
+    parser.add_argument('--save_path', type=str, default='./models/classifier_resnet34_trained.pth')
     parser.add_argument('--gpu_id', type=str, default="0")
     return parser.parse_args()
 
