@@ -32,11 +32,11 @@ class MHISTDataset(Dataset):
         self.transform = transform
         self.task = task
         
-        # Filter by partition
+        # filtering dataset by partition
         if partition in ["train", "test"]:
             self.data = self.data[self.data["Partition"] == partition]
         elif partition == "all" and task == "classification":
-            pass  # Use all data
+            pass  # keep all data for classification
         else:
             raise ValueError(f"Invalid partition: {partition}" + 
                             (f" for task: {task}" if partition == "all" else ""))
@@ -44,7 +44,7 @@ class MHISTDataset(Dataset):
         if len(self.data) == 0:
             raise ValueError(f"No samples found for partition: {partition}")
             
-        # Map class labels
+        # mapping labels to binary values
         self.label_map = {"SSA": 1, "HP": 0}
         self.data["Majority Vote Label"] = self.data["Majority Vote Label"].map(self.label_map)
 
@@ -57,21 +57,17 @@ class MHISTDataset(Dataset):
         image = Image.open(img_path).convert("RGB")
         label = self.data.iloc[idx]["Majority Vote Label"]
 
-        # Apply transform to image
         if self.transform:
             image = self.transform(image)
             
-        # Return different outputs based on task
         if self.task == "classification":
             label = torch.tensor(label, dtype=torch.long)
             return image, label
         else:  # segmentation
-            # Load mask
             mask_name = img_name.replace('.png', '_mask.png')
             mask_path = os.path.join(self.mask_dir, mask_name)
-            mask = Image.open(mask_path).convert("L")  # greyscale
-            
-            # Process mask
+            mask = Image.open(mask_path).convert("L")  # grayscale
+
             mask_np = np.array(mask)
             mask_binary = (mask_np > 50).astype(np.float32)
             mask = torch.tensor(mask_binary, dtype=torch.float)
