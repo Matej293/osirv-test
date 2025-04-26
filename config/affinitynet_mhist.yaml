@@ -1,0 +1,93 @@
+# AffinityNet → DeepLabV3+ MHIST Pipeline Configuration
+
+# 1) Dataset settings
+data:
+  csv_path: "./data/mhist_annotations.csv"
+  img_dir: "./data/images"
+  batch_size: 32
+  ssa_count: 990
+  hp_count: 2162
+
+# 2) Augmentation for classification and segmentation
+augmentation:
+  train:
+    resize: [224, 224]
+    crop: [224, 224]
+    horizontal_flip_prob: 0.5
+    vertical_flip_prob: 0.5
+    rotation_degrees: 15
+    brightness: 1.2
+    contrast: 1.5
+    saturation: 0.1
+    hue: 0.05
+    translate: [0.1, 0.1]
+  test:
+    resize: [224, 224]
+
+# 3) Classifier (AffinityNet stage) settings
+affinitynet:
+  # Learning rate for classifier fine-tuning
+  lr: 0.001
+
+  # Unfreeze schedule (gradual unfreezing of ResNet layers)
+  unfreeze_schedule:
+    - epochs: 5
+      layers: []
+    - epochs: 5
+      layers: ["layer4"]
+    - epochs: 5
+      layers: ["layer3"]
+    - epochs: 5
+      layers: ["layer2"]
+    - epochs: 10
+      layers: ["layer1"]
+
+  # Path to save the best classifier weights
+  cls_weights: "./models/resnet50_mhist_cls.pth"
+
+  # CAM seed generation
+  seed_dir: "./data/cam_seeds"
+  seed_percentile: 70
+
+  # Affinity network (refinement head) training
+  batch_size: 16
+  aff_lr: 0.001
+  aff_epochs: 15
+
+  # Propagation threshold and percentile for final pseudo-mask
+  prop_threshold: 0.2
+  prop_percentile: 50
+
+# 4) Output directories
+output:
+  # directory where CAM seeds are generated
+  seed_dir: "./data/cam_seeds"
+
+  # directory for segmentation-CAM seeds (optional override)
+  seg_cam_seeds: "./data/seg_cam_seeds"
+
+  # directory to write final propagated pseudo-masks
+  pseudo_dir: "./data/pseudo_masks"
+
+  # final segmentation model weights
+  final_weights: "./models/deeplab_affinity_mhist.pth"
+
+# 5) Segmentation model settings (DeepLabV3+)
+seg:
+  config: "config/default_config.yaml"
+  pretrained: "./models/deeplabv3plus_resnet101.pth"
+
+model:
+  output_stride: 16
+  num_classes: 1
+  pretrained_backbone: true
+
+# 6) Shared training parameters for segmentation
+training:
+  epochs: 25
+  learning_rate: 0.001
+  weight_decay: 0.0005
+  patience: 10
+
+# GPU selection
+gpu: "0"

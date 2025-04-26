@@ -13,55 +13,52 @@ def visualize_segmentation_results(images, masks, predictions, probabilities, st
     
     batch_size = min(len(images), max_samples)
     
-    # denormalizing
+    # Denormalize
     mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(images.device)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(images.device)
+    std  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(images.device)
     
     images_display = images[:batch_size].clone()
     images_display = images_display * std + mean
     images_display = images_display.clamp(0, 1)
     
-    # creating a visualization grid of images
     create_basic_visualizations(images_display, masks, predictions, step, logger, batch_size)
     create_detailed_visualizations(images_display, masks, predictions, probabilities, step, logger, batch_size)
     create_error_analysis(images_display, masks, predictions, step, logger, batch_size)
     create_uncertainty_visualization(images_display, probabilities, step, logger, batch_size)
     
-    # close all figures to free memory
     plt.close('all')
 
+
 def create_basic_visualizations(images, masks, predictions, step, logger, batch_size):
-    """Create basic input, prediction and ground truth visualizations."""
+    """Log input images, ground-truth masks, and predicted masks."""
+    # 1) Inputs
     logger.log_images("Viz/Input", images, step=step, max_images=batch_size)
     
-    # creating colored masks for ground truth and predictions
-    gt_colored = []
+    # 2) Color masks
+    gt_colored   = []
     pred_colored = []
     
     for i in range(batch_size):
-        # Ground truth - (blue HP, red SSA)
-        mask = masks[i][0].cpu().numpy()
-        colored_mask = np.zeros((3, mask.shape[0], mask.shape[1]))
-        if mask.mean() > 0.5:
-            colored_mask[0] = mask  # Red for SSA
-        else:
-            colored_mask[2] = 1 - mask  # Blue for HP
-        gt_colored.append(torch.from_numpy(colored_mask))
-        
-        # Prediction - (blue HP, red SSA)
-        pred = predictions[i][0].cpu().numpy()
-        colored_pred = np.zeros((3, pred.shape[0], pred.shape[1]))
-        if pred.mean() > 0.5:
-            colored_pred[0] = pred
-        else:
-            colored_pred[2] = 1 - pred  # Blue for HP
-        pred_colored.append(torch.from_numpy(colored_pred))
+        mask   = masks[i][0].cpu().numpy()
+        pred   = predictions[i][0].cpu().numpy()
+        h, w   = mask.shape
+
+        cm_gt = np.zeros((3, h, w), dtype=np.float32)
+        cm_gt[0] = mask
+        #cm_gt[2] = 1.0 - mask
+        gt_colored.append(torch.from_numpy(cm_gt))
+
+        cm_pr = np.zeros((3, h, w), dtype=np.float32)
+        cm_pr[0] = pred
+        #cm_pr[2] = 1.0 - pred
+        pred_colored.append(torch.from_numpy(cm_pr))
     
-    gt_colored = torch.stack(gt_colored)
-    pred_colored = torch.stack(pred_colored)
+    gt_colored_tensor   = torch.stack(gt_colored)
+    pred_colored_tensor = torch.stack(pred_colored)
     
-    logger.log_images("Viz/GroundTruth", gt_colored, step=step, max_images=batch_size)
-    logger.log_images("Viz/Prediction", pred_colored, step=step, max_images=batch_size)
+    logger.log_images("Viz/GroundTruth", gt_colored_tensor,   step=step, max_images=batch_size)
+    logger.log_images("Viz/Prediction",  pred_colored_tensor, step=step, max_images=batch_size)
+
 
 def create_detailed_visualizations(images, masks, predictions, probabilities, step, logger, batch_size):
     """Create detailed side-by-side visualizations."""

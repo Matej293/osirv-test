@@ -6,7 +6,6 @@ import torch.nn as nn
 import wandb
 from tqdm import tqdm
 from network import modeling
-from utils.postprocess import post_process_segmentation
 
 from metrics.wandb_logger import WandbLogger
 from datasets.mhist import get_mhist_dataloader
@@ -69,7 +68,6 @@ class IoULoss(nn.Module):
     def forward(self, inputs, targets):
         inputs = torch.sigmoid(inputs)
         
-        # Calculate intersection and union
         intersection = (inputs * targets).sum()
         total = (inputs + targets).sum()
         union = total - intersection
@@ -94,7 +92,7 @@ class CombinedLoss(nn.Module):
         return self.weight_dice * loss_dice + self.weight_bce * loss_bce + self.weight_iou * loss_iou
 
 # Training function
-def train_model(model, train_loader, device, config, logger=None, save_path=None):
+def train_model(model, train_loader, device, config, logger=None, save_path=None, val_loader=None):
     """Train the model with the given configuration."""
     class_weight = (config.get('data.ssa_count') + config.get('data.hp_count')) / config.get('data.ssa_count')
     criterion = CombinedLoss(
@@ -123,6 +121,11 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
     epochs = config.get('training.epochs')
     log_interval = config.get('logging.batch_log_interval')
     threshold = config.get('training.threshold')
+    
+    # early stopping parameters
+    patience = config.get('training.patience', 10)
+    early_stop_counter = 0
+    best_val_acc = 0.0
     
     for epoch in range(epochs):
         epoch_loss = 0.0
@@ -169,60 +172,69 @@ def train_model(model, train_loader, device, config, logger=None, save_path=None
         logger.log_scalar('Train/LearningRate', optimizer.param_groups[0]['lr'], step=epoch + 1)
         logger.log_scalar('Train/WeightDecay', optimizer.param_groups[0]['weight_decay'], step=epoch + 1)
 
-        scheduler.step()
-        
-        print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, "
-              f"Accuracy: {accuracy:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
-
-    # checking if it is a sweep run
-    is_sweep_run = False
-    if logger and isinstance(logger, WandbLogger) and wandb.run and wandb.run.sweep_id:
-        is_sweep_run = True
-    
-    # save the model
-    if save_path:
-        if is_sweep_run:
-            # for sweep runs, save model to a temp path to log as artifact and not locally
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(temp_dir, f"model_temp_{wandb.run.id}.pth")
-            torch.save({'model_state': model.state_dict()}, temp_path)
-
-            if logger and isinstance(logger, WandbLogger):
-                logger.log_model(
-                    model_path=temp_path,
-                    name=f"model-{wandb.run.id}",
-                    metadata={
-                        "accuracy": accuracy,
-                        "loss": epoch_loss,
-                        "epochs": epochs,
-                        "batch_size": config.get("data.batch_size"),
-                        "learning_rate": config.get("training.learning_rate")
-                    }
-                )
-            try:
-                os.remove(temp_path)
-                print("Sweep run - model saved to WandB artifact only")
-            except:
-                print("Warning: Could not remove temporary model file")
-        else:
-            # for non-sweep runs, save model locally and log it
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
-            torch.save({'model_state': model.state_dict()}, save_path)
-            print(f"Model saved to {save_path}")
+        # validation phase
+        if val_loader is not None:
+            model.eval()
+            val_correct, val_total = 0, 0
+            val_y_true, val_y_pred, val_outputs_all = [], [], []
+            val_loss = 0.0
             
-            if logger and isinstance(logger, WandbLogger):
-                logger.log_model(
-                    model_path=save_path,
-                    metadata={
-                        "accuracy": accuracy,
-                        "loss": epoch_loss,
-                        "epochs": epochs,
-                        "batch_size": config.get("data.batch_size"),
-                        "learning_rate": config.get("training.learning_rate")
-                    }
-                )
-    
+            with torch.no_grad():
+                for images, masks in val_loader:
+                    images, masks = images.to(device), masks.to(device)
+                    masks = masks.unsqueeze(1).float()
+                    
+                    outputs = model(images)
+                    loss = criterion(outputs, masks)
+                    val_loss += loss.item()
+                    
+                    probs = torch.sigmoid(outputs)
+                    predicted = (probs > threshold).float()
+                    
+                    val_correct += (predicted == masks).sum().item()
+                    val_total += masks.numel()
+                    
+                    val_y_true.extend(masks.cpu().numpy().flatten())
+                    val_y_pred.extend(predicted.cpu().numpy().flatten())
+                    val_outputs_all.extend(probs.cpu().numpy().flatten())
+            
+            val_acc = val_correct / val_total if val_total > 0 else 0
+            val_loss /= len(val_loader)
+            
+            print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, "
+                  f"Accuracy: {accuracy:.4f}, Val Acc: {val_acc:.4f}, Val Loss: {val_loss:.4f}")
+            
+            if logger:
+                logger.log_scalar('Validation/Accuracy', val_acc, step=epoch + 1)
+                logger.log_scalar('Validation/Loss', val_loss, step=epoch + 1)
+            
+            # early stopping check and model saving
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                early_stop_counter = 0
+                
+                if save_path:
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    torch.save({'model_state': model.state_dict()}, save_path)
+                    print(f"Saved new best model with validation accuracy: {val_acc:.4f}")
+            else:
+                early_stop_counter += 1
+                
+            if early_stop_counter >= patience:
+                print(f"Early stopping triggered after {epoch+1} epochs")
+                print(f"Best validation accuracy: {best_val_acc:.4f}")
+                break
+                
+            model.train()
+        else:
+            print(f"Epoch [{epoch+1}/{epochs}], Loss: {epoch_loss:.4f}, Accuracy: {accuracy:.4f}")
+
+        scheduler.step()
+
+    if val_loader is not None:
+        print(f"Best validation accuracy: {best_val_acc:.4f}")
+        print(f"Final model saved to {save_path}")
+
     return model
 
 # Evaluation function
@@ -240,10 +252,6 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
     correct, total = 0, 0
     all_preds, all_targets = [], []
     threshold = config.get('training.threshold')
-    pp_enabled = config.get('postprocessing.enabled', True)
-    pp_min_size = config.get('postprocessing.min_size', 50)
-    pp_closing_radius = config.get('postprocessing.closing_radius', 3)
-    pp_fill_holes = config.get('postprocessing.fill_holes', True)
 
     with torch.no_grad():
         for images, masks in test_loader:
@@ -258,14 +266,6 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
             
             predicted = (probs > threshold).float()
             
-            if pp_enabled:
-                predicted = post_process_segmentation(
-                    predicted, 
-                    min_size=pp_min_size,
-                    closing_radius=pp_closing_radius,
-                    fill_holes=pp_fill_holes
-                )
-
             correct += (predicted == masks).sum().item()
             total += masks.numel()
            
@@ -293,41 +293,15 @@ def evaluate_model(model, test_loader, device, config, logger, step=None):
                 sample_outputs = model(sample_images)
                 sample_probs = torch.sigmoid(sample_outputs)
                 sample_preds = (sample_probs > threshold).float()
-                
-                if pp_enabled:
-                    sample_preds_pp = post_process_segmentation(
-                        sample_preds,
-                        min_size=pp_min_size,
-                        closing_radius=pp_closing_radius,
-                        fill_holes=pp_fill_holes
-                    )
-                    
-                    visualize_segmentation_results(
-                        images=sample_images,
-                        masks=sample_masks,
-                        predictions=sample_preds,
-                        probabilities=sample_probs,
-                        step=step,
-                        logger=logger,
-                    )
-                    
-                    visualize_segmentation_results(
-                        images=sample_images,
-                        masks=sample_masks,
-                        predictions=sample_preds_pp,
-                        probabilities=sample_probs,
-                        step=step,
-                        logger=logger,
-                    )
-                else:
-                    visualize_segmentation_results(
-                        images=sample_images,
-                        masks=sample_masks,
-                        predictions=sample_preds,
-                        probabilities=sample_probs,
-                        step=step,
-                        logger=logger
-                    )
+
+                visualize_segmentation_results(
+                    images=sample_images,
+                    masks=sample_masks,
+                    predictions=sample_preds,
+                    probabilities=sample_probs,
+                    step=step,
+                    logger=logger
+                )
         except Exception as e:
             print(f"Warning: Could not visualize segmentation results: {e}")
     
@@ -437,7 +411,8 @@ def main():
             device, 
             config,
             logger,
-            config.get('model.saved_path')
+            config.get('model.saved_path'),
+            val_loader=test_loader
         )
         
         if run_eval and args.mode is None:
