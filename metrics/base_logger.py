@@ -82,18 +82,54 @@ class BaseLogger(ABC):
     def log_confusion_matrix(self, preds, targets, class_names, step=None, tag="ConfusionMatrix"):
         """Create and log a confusion matrix."""
         pass
+
+    # ——————————————
+    # these used to be abstract; we now provide a default
+    # implementation so subclasses aren’t forced to override
+    # ——————————————
+    def log_predictions(self, images, preds, targets, step=None, tag_prefix="Eval"):
+        """
+        Log input images, predictions, and ground truth.
+        By default just calls log_images three times.
+        """
+        # Image inputs
+        self.log_images(f"{tag_prefix}/Input", images, step)
+        # Predictions
+        self.log_images(f"{tag_prefix}/Prediction", preds, step)
+        # Ground truth
+        self.log_images(f"{tag_prefix}/GroundTruth", targets, step)
+
+    def log_evaluation_metrics(self,
+                               all_preds,
+                               all_targets,
+                               accuracy=None,
+                               avg_loss=None,
+                               step=None,
+                               class_names=None,
+                               tag_prefix="Eval"):
+        """
+        Log evaluation metrics and confusion matrix.
+        Uses calculate_metrics under the hood, then calls log_scalar
+        and log_confusion_matrix.
+        """
+        preds_np = self._ensure_numpy_int(all_preds)
+        targets_np = self._ensure_numpy_int(all_targets)
+        metrics = self.calculate_metrics(preds_np, targets_np)
+        if accuracy is not None:
+            metrics['accuracy'] = accuracy
+        if avg_loss is not None:
+            metrics['loss'] = avg_loss
         
-    @abstractmethod
-    def log_predictions(self, images, preds, targets, step, tag_prefix="Eval"):
-        """Log input images, predictions, and ground truth."""
-        pass
-    
-    @abstractmethod
-    def log_evaluation_metrics(self, all_preds, all_targets, accuracy=None, avg_loss=None, step=None, 
-                              class_names=None, tag_prefix="Eval"):
-        """Log evaluation metrics."""
-        pass
-    
+        # scalar metrics
+        for name, val in metrics.items():
+            self.log_scalar(f"{tag_prefix}/{name.capitalize()}", val, step)
+
+        # confusion matrix
+        if class_names is None:
+            class_names = ["0", "1"]
+        self.log_confusion_matrix(preds_np, targets_np, class_names, step, tag=f"{tag_prefix}/ConfusionMatrix")
+        return metrics
+
     @abstractmethod
     def close(self):
         """Close the logger."""

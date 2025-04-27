@@ -8,20 +8,6 @@ model:
   pretrained_backbone: true
   aspp_dilate: [6, 12, 18]
 
-segmentation:
-  encoder_name: "resnet101"
-  encoder_weights: "imagenet"
-  backbone: "resnet101"
-  output_stride: 16
-  num_classes: 1
-  pretrained_backbone: true
-  aspp_dilate: [6, 12, 18]
-  batch_size: 32
-  mixup_alpha: 0.4
-  loss_alpha: 0.3
-  loss_beta: 0.7
-  loss_gamma: 1.33
-
 # Classification pre-training (for CAM seeds)
 classification:
   backbone: "resnet101"
@@ -32,34 +18,22 @@ classification:
   save_path: "./models/clf_best.pth"
   patience: 10
   mixup_alpha: 0.2
-
-  # Loss hyperparameters
   tversky_alpha: 0.7
   tversky_beta: 0.3
   tversky_gamma: 1.33
-
-  # Progressive unfreeze schedule: 5 stages
   unfreeze_schedule:
-    # Stage 1: head only
     - layers: []
       epochs: 5
       lr_div: 1
-    # Stage 2: unfreeze layer4 only
     - layers: ["layer4"]
       epochs: 5
-      lr_div: 20
-    # Stage 3: unfreeze layer3 and layer4
+      lr_div: 2
     - layers: ["layer3", "layer4"]
       epochs: 5
-      lr_div: 50
-    # Stage 4: unfreeze layer2, layer3 & layer4
+      lr_div: 4
     - layers: ["layer2", "layer3", "layer4"]
-      epochs: 5
-      lr_div: 100
-    # Stage 5: unfreeze layer1, layer2, layer3 & layer4
-    - layers: ["layer1", "layer2", "layer3", "layer4"]
       epochs: 10
-      lr_div: 200
+      lr_div: 8
 
 # Dataset configuration
 data:
@@ -70,17 +44,12 @@ data:
   ssa_count: 990
   hp_count: 2162
 
-# Hyperparameters for semantic segmentation
+# Hyperparameters for main segmentation training
 training:
   epochs: 15
   learning_rate: 0.001
   weight_decay: 0.001
   threshold: 0.5
-
-# Self-training rounds
-self_training:
-  rounds: 2
-  conf_threshold: 0.9
 
 # Data augmentation
 augmentation:
@@ -90,18 +59,39 @@ augmentation:
     horizontal_flip_prob: 0.5
     vertical_flip_prob: 0.5
     rotation_degrees: 30
-    stain_jitter: 0.2
     elastic_alpha: 0.05
+    stain_jitter: 0.2
 
   segmentation:
     train:
       resize: [224, 224]
-      brightness: 1.2
-      contrast: 1.5
-      saturation: 0.2
-      hue: 0.1
-      elastic_alpha: 0.1
-      perspective: 0.2
+      # flipping and rotation
+      h_flip_p: 0.5
+      v_flip_p: 0.5
+      rot90_p: 0.5
+      # elastic transofrmation
+      elastic_alpha: 1.0
+      elastic_sigma: 50
+      elastic_p: 0.5
+      grid_p: 0.5
+      # color / stain
+      hsv_prob: 0.3
+      hue: 10
+      sat: 30
+      val: 10
+      hsv_p: 0.5
+      # torchstain normalization
+      stain_normalize_p: 0.7
+      # remove small regions
+      min_region: 500
+      # final normalization
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+    test:
+      resize: [224, 224]
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
 
 # WandB logging
 logging:
@@ -112,17 +102,11 @@ logging:
 # Post-processing (CAM → morphology → CRF)
 postprocessing:
   enabled: true
-  threshold_quantile: 0.6
+  threshold_quantile: 0.5
   open_kernel: 3
-  do_morphology: true
-  close_kernel: 5
-  min_object_size: 64
-  crf_iters: 3
   gaussian_sxy: 3
   gaussian_compat: 3
   bilateral_sxy: 80
   bilateral_srgb: 13
   bilateral_compat: 10
-  cam_resize: [224, 224]
-  cam_normalize_mean: [0.485, 0.456, 0.406]
-  cam_normalize_std: [0.229, 0.224, 0.225]
+  crf_iters: 5

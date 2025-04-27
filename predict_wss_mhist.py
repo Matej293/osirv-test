@@ -3,14 +3,12 @@ import cv2
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 from torchvision import models
 from torchcam.methods import SmoothGradCAMpp
 import pydensecrf.densecrf as dcrf
 from pydensecrf.utils import unary_from_softmax
-import timm
 import segmentation_models_pytorch as smp
 from datasets.mhist import get_mhist_dataloader
 from config.config_manager import ConfigManager
@@ -24,32 +22,8 @@ from albumentations.pytorch import ToTensorV2
 from skimage.morphology import remove_small_objects
 from PIL import Image
 from datasets.mhist import MHISTDataset
-import torchstain
-import matplotlib.pyplot as plt
 from sklearn.metrics import precision_recall_curve, auc
-
-# -----------------------------------
-# Loss: Focal Tversky for Classification
-# -----------------------------------
-class FocalTverskyLoss(nn.Module):
-    """
-    Focal Tversky loss for imbalanced binary classification.
-    """
-    def __init__(self, alpha=0.7, beta=0.3, gamma=4./3., smooth=1.0):
-        super().__init__()
-        self.alpha = alpha
-        self.beta = beta
-        self.gamma = gamma
-        self.smooth = smooth
-
-    def forward(self, logits, targets):
-        probs = torch.sigmoid(logits)
-        tp = (probs * targets).sum()
-        fn = ((1 - probs) * targets).sum()
-        fp = (probs * (1 - targets)).sum()
-
-        tversky = (tp + self.smooth) / (tp + self.alpha * fn + self.beta * fp + self.smooth)
-        return (1 - tversky) ** self.gamma
+from utils.utils import *
 
 # -----------------------------------
 # Classifier Pretraining
@@ -96,8 +70,7 @@ def pretrain_classifier(config, device):
     print(f"[Classifier] Loading backbone: {backbone_name}")
     if backbone_name in models.__dict__:
         backbone = models.__dict__[backbone_name](weights='DEFAULT')
-    else:
-        backbone = timm.create_model(backbone_name, pretrained=True)
+
     in_feat = backbone.fc.in_features
     backbone.fc = nn.Sequential(
         nn.Linear(in_feat, 2048),
@@ -114,7 +87,7 @@ def pretrain_classifier(config, device):
 
     # 4) Loss definitions
     bce = nn.BCEWithLogitsLoss()
-    ft  = FocalTverskyLoss(
+    ft  = ClassifierFocalTverskyLoss(
         alpha=config.get('classification.tversky_alpha', 0.7),
         beta=config.get('classification.tversky_beta',   0.3),
         gamma=config.get('classification.tversky_gamma',  1.33)
@@ -288,18 +261,17 @@ def pretrain_classifier(config, device):
                 print(f"[Classifier] Performance dropped too much! Restoring best model and reducing LR")
                 if best_model_state is not None:
                     model.load_state_dict(best_model_state)
-                    # Reduce LR by half
+                    # reducing LR by half
                     for param_group in optimizer.param_groups:
                         param_group['lr'] = param_group['lr'] / 2.0
 
-            # Early stopping check with patience
+            # early stopping
             if early_stop_counter >= patience:
                 print(f"[Classifier] Early stopping triggered after {epoch_count} epochs")
                 if best_model_state is not None:
                     model.load_state_dict(best_model_state)
                 break
 
-    # Always load the best model at the end
     try:
         model.load_state_dict(torch.load(config.get('classification.save_path')))
         print(f"[Classifier] Loaded best model with IoU: {best_iou:.4f}")
@@ -412,136 +384,107 @@ def extract_pseudo_masks(model, dataset, config, device):
 
 # -----------------------------------
 # Segmentation Training
-# -----------------------------------
-macenko = torchstain.normalizers.MacenkoNormalizer()
+# -----------------------------------    
+def make_seg_loaders(cfg):
+    resize = tuple(cfg.get('augmentation.segmentation.train.resize', (224,224)))
+    # 1) dummy transform so MHISTDataset knows mask_size
+    dummy_tf = transforms.Compose([transforms.Resize(resize)])
+    full_train = MHISTDataset(
+        cfg.get('data.csv_path'),
+        cfg.get('data.img_dir'),
+        mask_dir=cfg.get('data.mask_dir'),
+        transform=dummy_tf,
+        partition='train',
+        task='segmentation'
+    )
+    test_ds = MHISTDataset(
+        cfg.get('data.csv_path'),
+        cfg.get('data.img_dir'),
+        mask_dir=cfg.get('data.mask_dir'),
+        transform=transforms.Compose([
+            transforms.Resize(resize),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                cfg.get('augmentation.segmentation.test.mean'),
+                cfg.get('augmentation.segmentation.test.std')
+            )
+        ]),
+        partition='test',
+        task='segmentation'
+    )
 
-class TorchstainNormalize(A.ImageOnlyTransform):
-    """Albumentations wrapper around torchstain.MacenkoNormalizer."""
-    def __init__(self, always_apply=False, p=0.7):
-        super().__init__(always_apply, p)
-        self.normalizer = macenko
+    # 2) SSA-only subset
+    ssa_idxs = [i for i, lbl in enumerate(full_train.data["Majority Vote Label"]) if lbl == 'SSA']
+    if not ssa_idxs:
+        raise RuntimeError("No SSA samples in train partition!")
+    ssa_train = Subset(full_train, ssa_idxs)
+    print(f"[SegLoader] train SSA={len(ssa_train)}  val={len(test_ds)}")
 
-    def apply(self, img, **kwargs):
-        # img: H×W×C uint8 RGB
-        # torchstain expects float [0,1]
-        img_f = img.astype("float32") / 255.0
-        out = self.normalizer.normalize(img_f)
-        # back to uint8
-        out = (np.clip(out, 0, 1) * 255).astype("uint8")
-        return out
-
-    def get_transform_init_args_names(self):
-        return ()
-    
-def make_seg_loaders(csv_file, img_dir, mask_dir, batch_size, alb_cfg):
-    # 1) Dummy torchvision Resize so MHISTDataset picks up mask_size
-    resize_size = tuple(alb_cfg.get("resize", (224, 224)))
-    dummy_tf = transforms.Compose([transforms.Resize(resize_size)])
-
-    # 2) Build full train/test MHISTDatasets
-    full_train_ds = MHISTDataset(csv_file, img_dir, mask_dir,
-                                 transform=dummy_tf,
-                                 partition="train",
-                                 task="segmentation")
-    test_ds       = MHISTDataset(csv_file, img_dir, mask_dir,
-                                 transform=dummy_tf,
-                                 partition="test",
-                                 task="segmentation")
-
-    # 3) Filter SSA-only in the train split
-    df = full_train_ds.data  # this is already the "train" partition
-    ssa_local_idx = [i for i, lbl in enumerate(df["Majority Vote Label"]) if lbl == 'SSA']
-    if len(ssa_local_idx) == 0:
-        raise RuntimeError("No SSA samples found in train partition!")
-    ssa_train_ds = Subset(full_train_ds, ssa_local_idx)
-
-    # 4) Albumentations pipelines
+    # 3) Albumentations for train
+    alb = cfg.get('augmentation.segmentation.train')
     train_aug = A.Compose([
-        TorchstainNormalize(p=alb_cfg.get("stain_normalize_p", 0.7)),
-        A.Resize(*resize_size),
-        A.HorizontalFlip(p=alb_cfg.get("h_flip_p", 0.5)),
-        A.VerticalFlip(p=alb_cfg.get("v_flip_p", 0.5)),
-        A.RandomRotate90(p=alb_cfg.get("rot90_p", 0.5)),
-        A.ElasticTransform(
-            alpha=alb_cfg.get("elastic_alpha", 1.0),
-            sigma=alb_cfg.get("elastic_sigma", 50),
-            interpolation=1,  # cv2.INTER_LINEAR
-            p=alb_cfg.get("elastic_p", 0.3)
-        ),
-        A.GridDistortion(p=alb_cfg.get("grid_p", 0.3)),
-        A.HueSaturationValue(
-            hue_shift_limit=alb_cfg.get("hue", 10),
-            sat_shift_limit=alb_cfg.get("sat", 30),
-            val_shift_limit=alb_cfg.get("val", 10),
-            p=alb_cfg.get("hsv_p", 0.3)
-        ),
-        A.Normalize(
-            mean=alb_cfg.get("mean", [0.485, 0.456, 0.406]),
-            std=alb_cfg.get("std",  [0.229, 0.224, 0.225])
-        ),
+        TorchstainNormalize(p=alb.get('stain_normalize_p',0.7)),
+        A.Resize(*resize),
+        A.HorizontalFlip(p=alb.get('horizontal_flip_prob',0.5)),
+        A.VerticalFlip(p=alb.get('vertical_flip_prob',0.5)),
+        A.RandomRotate90(p=alb.get('random_rotate90_prob',0.5)),
+        A.ElasticTransform(p=alb.get('elastic_p',0.3),
+                           alpha=alb.get('elastic_alpha',1.0),
+                           sigma=alb.get('elastic_sigma',50)),
+        A.GridDistortion(p=alb.get('grid_distortion_prob',0.3)),
+        A.HueSaturationValue(p=alb.get('hsv_prob',0.3),
+                             hue_shift_limit=alb.get('hue_shift_limit',10),
+                             sat_shift_limit=alb.get('sat_shift_limit',30),
+                             val_shift_limit=alb.get('val_shift_limit',10)),
+        A.Normalize(mean=alb.get('mean'), std=alb.get('std')),
         ToTensorV2(),
-    ], additional_targets={"tissue": "mask"})
+    ], additional_targets={'tissue':'mask'})
 
-    val_aug = A.Compose([
-        A.Resize(*resize_size),
-        A.Normalize(
-            mean=alb_cfg.get("mean", [0.485, 0.456, 0.406]),
-            std=alb_cfg.get("std",  [0.229, 0.224, 0.225])
-        ),
-        ToTensorV2(),
-    ], additional_targets={"tissue": "mask"})
-
-    # 5) Wrap & apply Albumentations correctly
-    class SegWrapper(torch.utils.data.Dataset):
-        def __init__(self, base_ds, aug):
-            self.ds  = base_ds
-            self.aug = aug
+    class TrainWrapper(torch.utils.data.Dataset):
+        def __init__(self, base_ds, aug, img_dir):
+            self.base = base_ds
+            self.aug  = aug
+            self.img_dir = img_dir
 
         def __len__(self):
-            return len(self.ds)
+            return len(self.base)
 
         def __getitem__(self, i):
-            # 1) Pull back the raw PIL filename from the underlying MHISTDataset
-            if isinstance(self.ds, Subset):
-                real_idx = self.ds.indices[i]
-                mhist_ds = self.ds.dataset
+            # resolve real idx and raw MHISTDataset
+            if isinstance(self.base, Subset):
+                real_idx = self.base.indices[i]
+                raw_ds   = self.base.dataset
             else:
                 real_idx = i
-                mhist_ds = self.ds
-
-            # mhist_ds[real_idx] returns (image_tensor, gt_mask, tissue_mask)
-            _, gt, tissue = mhist_ds[real_idx]
-
-            # Now re-open the raw PIL to get the original HxW
-            row = mhist_ds.data.iloc[real_idx]
+                raw_ds   = self.base
+            # a) reload raw PIL for correct HxW
+            row   = raw_ds.data.iloc[real_idx]
             fname = row["Image Name"]
-            pil = Image.open(os.path.join(img_dir, fname)).convert("RGB")
-            img_np = np.array(pil)                     # H x W x 3
+            pil   = Image.open(os.path.join(self.img_dir, fname)).convert("RGB")
+            img_np = np.array(pil)  # HxWx3 uint8
 
-            gt_np     = (gt.squeeze(0).cpu().numpy()*255).astype(np.uint8)     # H x W
-            tissue_np = (tissue.squeeze(0).cpu().numpy()*255).astype(np.uint8) # H x W
+            # b) get masks (already resized via dummy_tf)
+            _, gt_mask, tissue_mask = raw_ds[real_idx]
+            gt_np     = (gt_mask.squeeze(0).numpy()*255).astype(np.uint8)
+            tissue_np = (tissue_mask.squeeze(0).numpy()*255).astype(np.uint8)
 
-            augmented = self.aug(image=img_np,
-                                 mask=gt_np,
-                                 tissue=tissue_np)
-            x = augmented["image"]                      # Tensor(3,H,W)
-            m = augmented["mask"][None]                 # Tensor(1,H,W)
-            t = augmented["tissue"][None]               # Tensor(1,H,W)
-            return x, m.float(), t.float()
+            # c) apply Albumentations
+            d = self.aug(image=img_np, mask=gt_np, tissue=tissue_np)
+            x = d['image']
+            m = d['mask'][None].float()/255.0
+            t = d['tissue'][None].float()/255.0
+            return x, m, t
 
     train_loader = DataLoader(
-        SegWrapper(ssa_train_ds, train_aug),
-        batch_size=batch_size, shuffle=True,
+        TrainWrapper(ssa_train, train_aug, cfg.get('data.img_dir')),
+        batch_size=cfg.get('data.batch_size'), shuffle=True,
         num_workers=4, pin_memory=True
     )
     val_loader = DataLoader(
-        SegWrapper(test_ds, val_aug),
-        batch_size=batch_size, shuffle=False,
-        num_workers=4, pin_memory=True
+        test_ds,
+        batch_size=cfg.get('data.batch_size'),
+        shuffle=False, num_workers=4, pin_memory=True
     )
-
-    print(f"[SegLoader] train SSA samples: {len(ssa_train_ds)}")
-    print(f"[SegLoader] val samples (test partition): {len(test_ds)}")
     return train_loader, val_loader
 
 
@@ -588,17 +531,6 @@ def evaluate_segmentation(model, val_loader, cfg, device):
     prec, rec, ths = precision_recall_curve(all_labels, all_probs)
     pr_auc = auc(rec, prec)
 
-    # plot
-    plt.figure(figsize=(6,6))
-    plt.plot(rec, prec, label=f"PR AUC = {pr_auc:.3f}")
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.title("Global Precision–Recall")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
     # report per-image IoU distribution
     ious = np.array(per_image_ious)
     print(f"Per-image IoU @th={cfg.get('training.threshold',0.5):.2f}: "
@@ -611,137 +543,87 @@ def evaluate_segmentation(model, val_loader, cfg, device):
         "recall":         rec,
         "thresholds":     ths,
         "pr_auc":         pr_auc,
+        "pred_flat":      all_probs,
+        "targets_flat":   all_labels,
     }
 
-def train_segmentation(cfg, device, logger=None):
-    train_loader, val_loader = make_seg_loaders(
-        csv_file = cfg.get('data.csv_path'),
-        img_dir  = cfg.get('data.img_dir'),
-        mask_dir = cfg.get('data.mask_dir'),
-        batch_size = cfg.get('data.batch_size'),
-        alb_cfg  = {
-        'resize': cfg.get('augmentation.segmentation.train.resize'),
-        'h_flip_p': cfg.get('augmentation.segmentation.train.horizontal_flip_prob',0.5),
-        'v_flip_p': cfg.get('augmentation.segmentation.train.vertical_flip_prob',0.5),
-        'hue': cfg.get('augmentation.segmentation.train.hue',0.0),
-        'sat': cfg.get('augmentation.segmentation.train.saturation',0.1),
-        'val': cfg.get('augmentation.segmentation.train.brightness',1.2)*0,
-        'elastic_alpha': cfg.get('augmentation.segmentation.train.elastic_alpha',0.05),
-        'elastic_sigma': 50,
-        'elastic_affine': 5,
-        'grid_p': 0.3,
-        'hsv_p': 0.3,
-        'mean': [0.485,0.456,0.406],
-        'std':  [0.229,0.224,0.225],
-        'stain_normalize_p': 0.7
-        }
-    )
-
-    hp, ssa = 0, 0
-    for _, gt, _ in val_loader:
-        if gt.sum()>0: ssa+=1
-        else:          hp+=1
-    print("Val has", ssa, "SSA slides and", hp, "HP slides")
+def train_segmentation(cfg, device, logger=None, step=None):
+    train_loader, val_loader = make_seg_loaders(cfg)
 
     seg = smp.DeepLabV3Plus(
         encoder_name=cfg.get('model.backbone'),
         encoder_weights='imagenet' if cfg.get('model.pretrained_backbone') else None,
-        in_channels=3,
-        classes=1,
-        activation=None
+        in_channels=3, classes=1, activation=None
     ).to(device)
 
-    # masked BCE + Dice
-    pos_w = (cfg.get('data.hp_count') + cfg.get('data.ssa_count')) / cfg.get('data.ssa_count')
-    def loss_fn(logits, gt, tissue):
-        bce_map = nn.BCEWithLogitsLoss(reduction='none',
-                                       pos_weight=torch.tensor(pos_w, device=device))(logits, gt)
-        bce_val = (bce_map * tissue).sum() / (tissue.sum() + 1e-8)
-        probs   = torch.sigmoid(logits)
-        inter   = (probs * gt * tissue).sum()
-        union   = (probs + gt * tissue).sum()
-        dice    = 1 - (2*inter + 1e-5) / (union + 1e-5)
-        return bce_val + dice
-
-    opt = optim.AdamW(
-        seg.parameters(),
-        lr=cfg.get('training.learning_rate'),
-        weight_decay=cfg.get('training.weight_decay')
+    pos_w = (cfg.get('data.hp_count')+cfg.get('data.ssa_count'))/cfg.get('data.ssa_count')
+    bce_map = nn.BCEWithLogitsLoss(
+        reduction='none',
+        pos_weight=torch.tensor(pos_w,device=device)
     )
-    total_steps = cfg.get('training.epochs') * len(train_loader)
-    sched = optim.lr_scheduler.OneCycleLR(
-        opt,
+    def loss_fn(logits, gt, tissue):
+        m = tissue
+        b = (bce_map(logits,gt)*m).sum()/(m.sum()+1e-8)
+        p = torch.sigmoid(logits)
+        inter = (p*gt*m).sum()
+        union = ((p+gt)*m).sum()
+        dice = 1 - (2*inter+1e-5)/(union+1e-5)
+        return b + dice
+
+    optimizer = optim.AdamW(seg.parameters(),
+                            lr=cfg.get('training.learning_rate'),
+                            weight_decay=cfg.get('training.weight_decay'))
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
         max_lr=cfg.get('training.learning_rate'),
-        total_steps=total_steps,
+        total_steps=cfg.get('training.epochs')*len(train_loader),
         pct_start=0.1
     )
 
-    mixup_alpha = cfg.get('segmentation.mixup_alpha', 0.4)
-
-    best_val_iou = 0.0
+    best_iou = 0.0
     for ep in range(cfg.get('training.epochs')):
-        seg.train()
-        tot_loss = 0.0
+        seg.train(); tr_loss=0.0
+        for x,gt,t in tqdm(train_loader, desc=f"Train Ep{ep+1}/{cfg.get('training.epochs')}"):
+            x,gt,t = x.to(device),gt.to(device),t.to(device)
+            optimizer.zero_grad()
+            l = loss_fn(seg(x),gt,t)
+            l.backward(); optimizer.step(); scheduler.step()
+            tr_loss += l.item()
+        print(f"[Seg] Ep{ep+1} Train Loss: {tr_loss/len(train_loader):.4f}")
 
-        for x, gt, tissue in tqdm(train_loader, desc=f"Train Ep{ep+1}/{cfg.get('training.epochs')}"):
-            x       = x.to(device)
-            gt      = gt.to(device)
-            tissue  = tissue.to(device)
-
-            # --- MixUp on this batch ---
-            if mixup_alpha > 0:
-                lam = np.random.beta(mixup_alpha, mixup_alpha)
-                idx = torch.randperm(x.size(0))
-                x      = lam * x + (1 - lam) * x[idx]
-                gt     = lam * gt + (1 - lam) * gt[idx]
-                tissue = lam * tissue + (1 - lam) * tissue[idx]
-
-            opt.zero_grad()
-            logits = seg(x)
-
-            loss = loss_fn(logits, gt, tissue)
-            loss.backward()
-            opt.step()
-            sched.step()
-
-            tot_loss += loss.item()
-
-        avg_train_loss = tot_loss / len(train_loader)
-        print(f"[Seg] Ep{ep+1} Train Loss: {avg_train_loss:.4f}")
-
-        # --- validation & threshold sweep unchanged ---
+        # — fast, in-RAM val —
         seg.eval()
-        all_p, all_g, all_t = [], [], []
+        Ps, Gs, Ts = [],[],[]
         with torch.no_grad():
-            for x, gt, tissue in val_loader:
-                x, gt, tissue = x.to(device), gt.to(device), tissue.to(device)
-                p = torch.sigmoid(seg(x))
-                all_p.append(p.cpu()); all_g.append(gt.cpu()); all_t.append(tissue.cpu())
-        all_p = torch.cat(all_p); all_g = torch.cat(all_g); all_t = torch.cat(all_t)
+            for x,gt,t in val_loader:
+                x,gt,t = x.to(device),gt.to(device),t.to(device)
+                Ps.append(torch.sigmoid(seg(x)).cpu())
+                Gs.append(gt.cpu()); Ts.append(t.cpu())
+        P = torch.cat(Ps); G = torch.cat(Gs); T = torch.cat(Ts)
+        N,M,H,W = P.shape
 
-        best_th, best_iou = 0.5, 0.0
-        for th in np.linspace(0.1, 0.9, 17):
-            pr = (all_p > th).float() * all_t
-            inter = (pr * all_g).sum().item()
-            union = ((pr + all_g) >= 1).sum().item()
-            iou = inter / (union + 1e-6)
-            if iou > best_iou:
-                best_iou, best_th = iou, th
+        mask_ssa = (G.view(N,-1).sum(dim=1)>0)
+        Pssa = P[mask_ssa]; Gssa = G[mask_ssa]; Tssa = T[mask_ssa]
+        Pf = (Pssa>0.5).float()*Tssa
 
-        m = all_t.bool()
-        acc = ( (all_p>best_th).float()[m] == all_g[m] ).float().mean().item()
+        # per-image IoU
+        inter = (Pf*Gssa).view(Pssa.size(0),-1).sum(dim=1)
+        union = (((Pf+Gssa)>=1).view(Pssa.size(0),-1)).sum(dim=1)
+        mean_iou = (inter/(union+1e-8)).mean().item()
 
-        print(f"[Seg] Ep{ep+1} Val Acc: {acc:.4f}, Val IoU: {best_iou:.4f} @th={best_th:.2f}")
-        if logger:
-            logger.log_scalar('Seg/Val_Acc', acc, step=ep+1)
-            logger.log_scalar('Seg/Val_IoU', best_iou, step=ep+1)
+        flat_pr = Pf.view(-1); flat_gt = Gssa.view(-1)
+        acc = (flat_pr==flat_gt).float().mean().item()
 
-        if best_iou > best_val_iou:
-            best_val_iou = best_iou
-            torch.save({'model_state': seg.state_dict()}, cfg.get('model.saved_path'))
-            print(f"[Seg] Saved best IoU: {best_val_iou:.4f}")
+        print(f"[Seg] Ep{ep+1} Val Acc: {acc:.4f}, IoU: {mean_iou:.4f} @th=0.50")
 
-    return seg, train_loader
+        if mean_iou>best_iou:
+            best_iou=mean_iou
+            torch.save({'model_state':seg.state_dict()},
+                       cfg.get('model.saved_path'))
+            print(f"[Seg] Saved best IoU: {best_iou:.4f}")
+
+    return seg, train_loader, val_loader
+
 
 # -----------------------------------
 # Main Pipeline
@@ -763,8 +645,7 @@ def main():
     print(f"[Classifier] Loading backbone: {backbone_name}")
     if backbone_name in models.__dict__:
         backbone = models.__dict__[backbone_name](weights='DEFAULT')
-    else:
-        backbone = timm.create_model(backbone_name, pretrained=True)
+
     in_feat = backbone.fc.in_features
     backbone.fc = nn.Sequential(
         nn.Linear(in_feat, 2048),
@@ -782,48 +663,54 @@ def main():
     clf_model.eval()
     clf_model.to(device)
 
-    all_dataloader = get_mhist_dataloader(
-        csv_file=cfg.get('data.csv_path'),
-        img_dir=cfg.get('data.img_dir'),
-        batch_size=cfg.get('classification.batch_size'),
-        partition='all',
-        augmentation_config=cfg.get('augmentation.classification'),
-        task='classification'
-    )
+    # all_dataloader = get_mhist_dataloader(
+    #     csv_file=cfg.get('data.csv_path'),
+    #     img_dir=cfg.get('data.img_dir'),
+    #     batch_size=cfg.get('classification.batch_size'),
+    #     partition='all',
+    #     augmentation_config=cfg.get('augmentation.classification'),
+    #     task='classification'
+    # )
 
-    all_dataset = all_dataloader.dataset
+    # all_dataset = all_dataloader.dataset
 
     # 2) Generate pseudo-masks
     # if cfg.get('postprocessing.enabled'):
     #    extract_pseudo_masks(clf_model, all_dataset, cfg, device)
 
     # 3) Train segmentation
-    seg_model, train_loader = train_segmentation(cfg, device, logger)
+    seg_model, _, val_loader = train_segmentation(cfg, device, logger, cfg.get('training.epochs'))
 
     # 4) Final evaluation & visualization
     print("[Main] Final eval & visualization...")
-    seg_model.eval()
-    _, val_loader = make_seg_loaders(cfg)
-    metrics = evaluate_segmentation(seg_model, val_loader, cfg, device)
+    eval_dict = evaluate_segmentation(seg_model, val_loader, cfg, device)
+
+    test_loader = get_mhist_dataloader(
+        csv_file=cfg.get('data.csv_path'),
+        img_dir=cfg.get('data.img_dir'),
+        mask_dir=cfg.get('data.mask_dir'),
+        batch_size=cfg.get('classification.batch_size'),
+        partition='test',
+        task='segmentation'
+    )
 
     with torch.no_grad():
-        for imgs, msks, _ in train_loader:
-            imgs = imgs.to(device)
-            msks = msks.to(device)
+        for imgs, msks, _ in test_loader:
+            imgs   = imgs.to(device)
+            msks   = msks.to(device)
             outs   = seg_model(imgs)
             probs  = torch.sigmoid(outs)
             preds  = (probs > cfg.get('training.threshold')).float()
 
             visualize_segmentation_results(
-                images=imgs,
-                masks=msks,
-                predictions=preds,
-                probabilities=probs,
-                step=cfg.get('training.epochs'),
-                logger=logger
+                images      = imgs,
+                masks       = msks,
+                predictions = preds,
+                probabilities = probs,
+                step        = cfg.get('training.epochs'),
+                logger      = logger
             )
             break
-
 
 if __name__ == '__main__':
     main()
