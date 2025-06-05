@@ -106,6 +106,79 @@ class ClassifierFocalTverskyLoss(nn.Module):
         tversky = (tp + self.smooth) / (tp + self.alpha * fn + self.beta * fp + self.smooth)
         return (1 - tversky) ** self.gamma
 
+class OHEMLoss(nn.Module):
+    def __init__(self, keep_ratio: float = 0.3, eps: float = 1e-6):
+        super().__init__()
+        assert 0 < keep_ratio <= 1.0
+        self.keep_ratio = keep_ratio
+        self.eps = eps
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor, tissue_mask: torch.Tensor) -> torch.Tensor:
+        """
+        logits:      (B,1,H,W)
+        targets:     (B,1,H,W) in {0,1}
+        tissue_mask: (B,1,H,W) in {0,1}
+        """
+        bce_map = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')  # (B,1,H,W)
+        bce_map = bce_map * tissue_mask  # ignore background
+
+        B, C, H, W = bce_map.shape
+        flat_loss   = bce_map.view(B, -1)             # (B, H*W)
+        flat_tgt    = targets.view(B, -1)             # (B, H*W)
+        flat_tissue = tissue_mask.view(B, -1)         # (B, H*W)
+
+        # Count how many pixels are positive inside tissue, per image
+        pos_counts = (flat_tgt * flat_tissue).sum(dim=1).long()  # (B,)
+
+        # Compute k = number of pixels to keep (as before)
+        total_pixels = int(flat_loss.size(1))
+        k_all = max(1, int(total_pixels * self.keep_ratio))
+
+        losses = []
+        for i in range(B):
+            loss_i   = flat_loss[i]   # shape (H*W,)
+            tgt_i    = flat_tgt[i]
+            tissue_i = flat_tissue[i]
+            pos_i    = (tgt_i * tissue_i).nonzero().view(-1)  # indices of positive pixels
+
+            # Always keep every positive pixel inside tissue
+            keep_indices = pos_i.tolist()
+
+            # Now pick the hardest negatives among the rest
+            n_pos = pos_i.numel()
+            n_remain = max(0, k_all - n_pos)
+
+            if n_remain > 0:
+                # Mask out positives so we only rank negatives
+                neg_mask = ((tgt_i == 0) & (tissue_i == 1))
+                neg_losses = loss_i[neg_mask]  # BCE of all negative‐tissue pixels
+                if neg_losses.numel() > 0:
+                    # top n_remain largest negative losses
+                    topk_vals_neg, topk_idx_neg = neg_losses.topk(n_remain, largest=True, sorted=False)
+                    # But topk_idx_neg are indices inside neg_losses; map back to original flatten index:
+                    # First get the indices of all negative pixels in flatten order
+                    neg_flat_idx = neg_mask.nonzero().view(-1)  # these are the flat indices
+                    chosen_negatives = neg_flat_idx[topk_idx_neg]  # original flat indices
+                    keep_indices += chosen_negatives.tolist()
+
+            # If there were zero positives and zero negatives inside tissue (rare), at least keep the single hardest pixel
+            if len(keep_indices) == 0:
+                # select the overall pixel (inside tissue) with max loss
+                tissue_indices = (tissue_i == 1).nonzero().view(-1)
+                if tissue_indices.numel() > 0:
+                    losses_in_tissue = loss_i[tissue_indices]
+                    max_idx = losses_in_tissue.argmax().item()
+                    keep_indices = [int(tissue_indices[max_idx])]
+                else:
+                    # no tissue at all—keep one pixel arbitrarily (the first)
+                    keep_indices = [0]
+
+            kept_losses = loss_i[keep_indices]
+            losses.append(kept_losses.mean())
+
+        return torch.stack(losses).mean()
+
+
 # Loss: Focal Tversky for Segmentation
 class SegmentationFocalTverskyLoss(nn.Module):
     """
@@ -141,55 +214,72 @@ class SegmentationFocalTverskyLoss(nn.Module):
         loss = (1 - tversky) ** self.gamma
         return loss.mean()
 
-# Loss: Combined Focal-Tversky + Lovasz hinge
+# Loss: Combined Focal-Tversky + Lovasz hinge + OHEM
 class CombinedSegmentationLoss(nn.Module):
-    """
-    Combines Focal-Tversky with a small Lovász hinge term.
-    """
     def __init__(self,
                  ft_kwargs: dict = None,
-                 lovasz_weight: float = 0.2):
-        """
-        ft_kwargs:    passed to FocalTverskyLoss(...)
-        lovasz_weight: weight given to the lovasz term
-        """
+                 lovasz_weight: float = 0.2,
+                 ohem_keep_ratio: float = 0.3):
         super().__init__()
-        ft_kwargs = ft_kwargs or {}
-        self.ft_loss       = SegmentationFocalTverskyLoss(**ft_kwargs)
+        self.ohem_loss     = OHEMLoss(keep_ratio=ohem_keep_ratio)
+        self.ft_loss       = SegmentationFocalTverskyLoss(**(ft_kwargs or {}))
         self.lovasz_weight = lovasz_weight
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits, targets, tissue_mask):
         """
-        logits:  (B,1,H,W)
-        targets: (B,1,H,W)
+        logits:      (B,1,H,W)
+        targets:     (B,1,H,W)
+        tissue_mask: (B,1,H,W)
         """
-        # make sure targets is float tensor
         t = targets.float()
+        # 1) Compute OHEM on all images (even if no positives—our new OHEM handles that)
+        ohem_term = self.ohem_loss(logits, t, tissue_mask)
 
-        # 1) Focal-Tversky
-        ft = self.ft_loss(logits, t)
+        # 2) For FT and Lovasz, only accumulate on images where there is at least one positive
+        flat_t = t.view(t.size(0), -1)
+        positive_batches = (flat_t.sum(dim=1) > 0)  # boolean mask of shape (B,)
 
-        # 2) Lovász hinge expects shape (B,H,W) and logits
-        #    so we squeeze out the channel dim:
-        lov = lovasz_hinge(logits, t.squeeze(1))
+        if positive_batches.any():
+            ft_term = self.ft_loss(logits[positive_batches], targets[positive_batches])
+            lov_term = lovasz_hinge(
+                logits[positive_batches],
+                targets[positive_batches].squeeze(1).long()
+            )
+            combined = ohem_term + ft_term + self.lovasz_weight * lov_term
+        else:
+            # all images in batch have zero positives → skip FT & Lovasz
+            combined = ohem_term
 
-        return ft + self.lovasz_weight * lov
+        return combined
 
-def remove_small_regions_batch(preds: torch.Tensor, min_size: int = 500) -> torch.Tensor:
+
+def remove_small_regions_batch(preds: torch.Tensor,
+                               tissue: torch.Tensor,
+                               min_size: int) -> torch.Tensor:
     """
-    preds: (N,1,H,W) binary (0/1) torch tensor
-    removes components smaller than `min_size` pixels
+    preds: (N,1,H,W) binary torch tensor
+    tissue: (N,1,H,W) binary torch tensor mask of valid tissue
+    removes connected components < min_size px *within tissue*
     """
     device = preds.device
     out = preds.clone()
-    N,_,H,W = preds.shape
+    N,_,_,_ = preds.shape
+
     for i in range(N):
-        mask = (preds[i,0].cpu().numpy() > 0).astype(np.uint8)
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        # numpy arrays on CPU
+        p = (preds[i,0].cpu().numpy() > 0).astype(np.uint8)
+        t = (tissue[i,0].cpu().numpy() > 0).astype(np.uint8)
+        mask = p * t
+
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            mask, connectivity=8
+        )
         clean = np.zeros_like(mask)
         for lab in range(1, num_labels):
             area = stats[lab, cv2.CC_STAT_AREA]
             if area >= min_size:
                 clean[labels == lab] = 1
+
         out[i,0] = torch.from_numpy(clean).to(device)
+
     return out

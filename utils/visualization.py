@@ -22,7 +22,7 @@ def visualize_segmentation_results(images, masks, predictions, probabilities, st
     images_display = images_display * std + mean
     images_display = images_display.clamp(0,1)
 
-    predictions = remove_small_regions_batch(predictions, min_size=500)
+    predictions = remove_small_regions_batch(predictions, masks, min_size=500)
 
     _basic_viz(images_display, masks, predictions, step, logger, batch_size)
     _detailed_viz(images_display, masks, predictions, probabilities, step, logger, batch_size)

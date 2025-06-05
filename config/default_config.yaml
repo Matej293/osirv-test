@@ -2,7 +2,7 @@
 model:
   pretrained_path: "./models/deeplabv3plus_resnet101.pth"
   saved_path: "./models/deeplabv3plus_resnet101_trained.pth"
-  backbone: "resnet101"
+  backbone: "resnet34"
   output_stride: 16
   num_classes: 1
   pretrained_backbone: true
@@ -10,7 +10,7 @@ model:
 
 # Classification pre-training (for CAM seeds)
 classification:
-  backbone: "resnet101"
+  backbone: "resnet34"
   batch_size: 32
   lr: 0.01
   weight_decay: 0.01
@@ -24,16 +24,15 @@ classification:
   unfreeze_schedule:
     - layers: []
       epochs: 5
-      lr_div: 1
-    - layers: ["layer4"]
+
+    - layers: ["4"]
       epochs: 5
-      lr_div: 2
-    - layers: ["layer3", "layer4"]
+
+    - layers: ["3", "4"]
       epochs: 5
-      lr_div: 4
-    - layers: ["layer2", "layer3", "layer4"]
+
+    - layers: ["2", "3", "4"]
       epochs: 10
-      lr_div: 8
 
 # Dataset configuration
 data:
