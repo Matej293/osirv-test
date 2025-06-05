@@ -107,7 +107,7 @@ class ClassifierFocalTverskyLoss(nn.Module):
         return (1 - tversky) ** self.gamma
 
 class OHEMLoss(nn.Module):
-    def __init__(self, keep_ratio: float = 0.3, eps: float = 1e-6):
+    def __init__(self, keep_ratio: float = 0.5, eps: float = 1e-6):
         super().__init__()
         assert 0 < keep_ratio <= 1.0
         self.keep_ratio = keep_ratio
@@ -130,8 +130,8 @@ class OHEMLoss(nn.Module):
         # Count how many pixels are positive inside tissue, per image
         pos_counts = (flat_tgt * flat_tissue).sum(dim=1).long()  # (B,)
 
-        # Compute k = number of pixels to keep (as before)
-        total_pixels = int(flat_loss.size(1))
+        # Compute k = number of pixels to keep per image
+        total_pixels = flat_loss.size(1)  # H*W
         k_all = max(1, int(total_pixels * self.keep_ratio))
 
         losses = []
@@ -152,16 +152,20 @@ class OHEMLoss(nn.Module):
                 # Mask out positives so we only rank negatives
                 neg_mask = ((tgt_i == 0) & (tissue_i == 1))
                 neg_losses = loss_i[neg_mask]  # BCE of all negative‐tissue pixels
-                if neg_losses.numel() > 0:
-                    # top n_remain largest negative losses
-                    topk_vals_neg, topk_idx_neg = neg_losses.topk(n_remain, largest=True, sorted=False)
+
+                # Clamp n_remain so we never ask for more negatives than exist
+                num_neg = neg_losses.numel()
+                n_remain_clamped = min(n_remain, num_neg)
+
+                if n_remain_clamped > 0:
+                    # top n_remain_clamped largest negative losses
+                    topk_vals_neg, topk_idx_neg = neg_losses.topk(n_remain_clamped, largest=True, sorted=False)
                     # But topk_idx_neg are indices inside neg_losses; map back to original flatten index:
-                    # First get the indices of all negative pixels in flatten order
                     neg_flat_idx = neg_mask.nonzero().view(-1)  # these are the flat indices
                     chosen_negatives = neg_flat_idx[topk_idx_neg]  # original flat indices
                     keep_indices += chosen_negatives.tolist()
 
-            # If there were zero positives and zero negatives inside tissue (rare), at least keep the single hardest pixel
+            # If there were zero positives and zero negatives inside tissue, keep one pixel
             if len(keep_indices) == 0:
                 # select the overall pixel (inside tissue) with max loss
                 tissue_indices = (tissue_i == 1).nonzero().view(-1)
@@ -253,33 +257,56 @@ class CombinedSegmentationLoss(nn.Module):
         return combined
 
 
-def remove_small_regions_batch(preds: torch.Tensor,
-                               tissue: torch.Tensor,
-                               min_size: int) -> torch.Tensor:
+def remove_small_regions_batch(
+    preds: torch.Tensor,
+    tissue: torch.Tensor,
+    min_size: int
+) -> torch.Tensor:
     """
-    preds: (N,1,H,W) binary torch tensor
-    tissue: (N,1,H,W) binary torch tensor mask of valid tissue
-    removes connected components < min_size px *within tissue*
+    preds:   (N,1,H,W)  binary torch tensor (0/1) of predicted mask
+    tissue:  (N,1,H,W)  binary torch tensor mask of valid tissue
+    min_size: int       minimum connected‐component size (in pixels) to keep
+    
+    Returns a tensor of shape (N,1,H,W) where any connected component
+    that lies within 'tissue' and has area < min_size is removed (set to 0).
     """
+    # Ensure both inputs are 4D
+    if preds.dim() != 4 or tissue.dim() != 4:
+        raise ValueError(f"remove_small_regions_batch expects 4D tensors, got preds.dim()={preds.dim()}, tissue.dim()={tissue.dim()}")
+
     device = preds.device
+    dtype = preds.dtype
     out = preds.clone()
-    N,_,_,_ = preds.shape
+
+    N, C, H, W = preds.shape
+    if C != 1:
+        raise ValueError(f"remove_small_regions_batch expects preds.shape[1] == 1, got {C}")
 
     for i in range(N):
-        # numpy arrays on CPU
-        p = (preds[i,0].cpu().numpy() > 0).astype(np.uint8)
-        t = (tissue[i,0].cpu().numpy() > 0).astype(np.uint8)
-        mask = p * t
+        # Convert this batch element to a CPU numpy array of 0/1
+        p_np = (preds[i, 0].cpu().numpy() > 0).astype(np.uint8)
+        t_np = (tissue[i, 0].cpu().numpy() > 0).astype(np.uint8)
 
+        # Only process pixels inside tissue
+        mask = p_np * t_np  # shape (H, W), 0/1
+
+        # Find connected components
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
             mask, connectivity=8
         )
-        clean = np.zeros_like(mask)
+        clean = np.zeros_like(mask, dtype=np.uint8)
+
+        # Keep only components whose area >= min_size
         for lab in range(1, num_labels):
             area = stats[lab, cv2.CC_STAT_AREA]
             if area >= min_size:
                 clean[labels == lab] = 1
 
-        out[i,0] = torch.from_numpy(clean).to(device)
+        # Write back into out tensor, preserving dtype and device
+        out[i, 0] = (
+            torch.from_numpy(clean)
+            .to(device)
+            .to(dtype)
+        )
 
     return out
